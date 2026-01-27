@@ -1,0 +1,52 @@
+"""Adapters for different event sources (one per CCAA/source)."""
+
+from typing import TYPE_CHECKING, Callable
+
+if TYPE_CHECKING:
+    from src.core.base_adapter import BaseAdapter
+
+# Registry of all available adapters
+ADAPTER_REGISTRY: dict[str, type["BaseAdapter"]] = {}
+
+# Flag to prevent circular imports during loading
+_adapters_loaded = False
+
+
+def register_adapter(source_id: str) -> Callable[[type["BaseAdapter"]], type["BaseAdapter"]]:
+    """Decorator to register an adapter in the registry.
+
+    Usage:
+        @register_adapter("madrid_datos_abiertos")
+        class MadridAdapter(BaseAdapter):
+            ...
+    """
+
+    def decorator(adapter_class: type["BaseAdapter"]) -> type["BaseAdapter"]:
+        ADAPTER_REGISTRY[source_id] = adapter_class
+        return adapter_class
+
+    return decorator
+
+
+def get_adapter(source_id: str) -> type["BaseAdapter"] | None:
+    """Get an adapter class by its source_id."""
+    _ensure_adapters_loaded()
+    return ADAPTER_REGISTRY.get(source_id)
+
+
+def list_adapters() -> list[str]:
+    """List all registered adapter source_ids."""
+    _ensure_adapters_loaded()
+    return list(ADAPTER_REGISTRY.keys())
+
+
+def _ensure_adapters_loaded() -> None:
+    """Ensure all adapter modules are loaded."""
+    global _adapters_loaded
+    if _adapters_loaded:
+        return
+    _adapters_loaded = True
+
+    # Import adapter modules to trigger registration
+    from src.adapters import gold_api_adapter  # noqa: F401 - Gold (API/JSON)
+    from src.adapters import silver_rss_adapter  # noqa: F401 - Silver (RSS)

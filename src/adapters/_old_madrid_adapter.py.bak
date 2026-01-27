@@ -1,0 +1,607 @@
+"""Adapter for Madrid Datos Abiertos - Eventos Culturales API."""
+
+import json
+import re
+from datetime import date, datetime, time
+from typing import Any
+
+from src.adapters import register_adapter
+from src.core.base_adapter import AdapterType, BaseAdapter
+from src.core.event_model import EventCreate, EventOrganizer, LocationType, OrganizerType
+from src.core.llm_enricher import EventEnrichment, get_llm_enricher
+from src.core.image_provider import get_image_provider
+
+
+# ============================================================
+# CATEGORY MAPPING
+# Maps Madrid @type URIs to DB category slugs
+# DB categories: cultural, social, economica, politica, sanitaria, tecnologia
+# ============================================================
+
+CATEGORY_TO_DB_SLUG = {
+    # Cultural (cine, teatro, exposiciones, conciertos)
+    "TeatroPerformance": "cultural",
+    "CircoMagia": "cultural",
+    "Musica": "cultural",
+    "MusicaClasica": "cultural",
+    "MusicaModerna": "cultural",
+    "Danza": "cultural",
+    "DanzaBaile": "cultural",
+    "DanzaContemporanea": "cultural",
+    "DanzaClasica": "cultural",
+    "DanzaEspanola": "cultural",
+    "Cine": "cultural",
+    "CineActividadesAudiovisuales": "cultural",
+    "Exposiciones": "cultural",
+    "ExposicionFotografia": "cultural",
+    "ExposicionPintura": "cultural",
+    "RecitalesPresentacionesActosLiterarios": "cultural",
+    "CuentacuentosTiteresMarionetas": "cultural",
+    "ProgramacionDestacadaAgendaCultura": "cultural",
+    "Navidad": "cultural",
+    "FiestasCarnavales": "cultural",
+    "ActividadesCalleArteUrbano": "cultural",
+    "ClubesLectura": "cultural",
+
+    # Social (encuentros, solidaridad, comunidad)
+    "1ciudad21distritos": "social",
+    "ActividadesDeportivas": "social",
+
+    # Tecnología (charlas, talleres digitales)
+    "ConferenciasColoquios": "tecnologia",
+    "CursosTalleres": "tecnologia",
+    "CapacitacionDigital": "tecnologia",
+    "Idiomas": "tecnologia",
+
+    # Economica
+    "ExcursionesItinerariosVisitas": "cultural",  # Turismo -> cultural
+    "ItinerariosOtrasActividadesAmbientales": "social",
+}
+
+# Specific keyword overrides for better categorization
+KEYWORD_CATEGORY_OVERRIDES = {
+    # Social keywords
+    "solidari": "social",
+    "mercadillo": "social",
+    "mercado solidario": "social",
+    "voluntari": "social",
+    "donacion": "social",
+    "caridad": "social",
+    "vecin": "social",
+    "comunitar": "social",
+    "mayores": "social",
+    "tercera edad": "social",
+    "intergeneracional": "social",
+
+    # Political keywords
+    "pleno": "politica",
+    "ciudadan": "politica",
+    "participat": "politica",
+    "debate politico": "politica",
+
+    # Health keywords
+    "salud": "sanitaria",
+    "sanitar": "sanitaria",
+    "vacuna": "sanitaria",
+    "prevencion": "sanitaria",
+    "bienestar": "sanitaria",
+
+    # Economic keywords
+    "empleo": "economica",
+    "emprend": "economica",
+    "negocio": "economica",
+    "finanz": "economica",
+}
+
+
+# ============================================================
+# ACCESSIBILITY MAPPING
+# Maps Madrid accessibility codes to tag slugs
+# ============================================================
+
+ACCESSIBILITY_CODE_TO_TAGS = {
+    # Maps Madrid accessibility codes to existing DB tag slugs
+    # Available tags: accesibilidad, movilidad-reducida, lengua-de-signos, braille,
+    #                 audiodescripcion, subtitulos, pictogramas, funcion-relajada
+    "0": [],  # No accessibility info
+    "1": ["accesibilidad", "movilidad-reducida"],  # Wheelchair access
+    "2": ["accesibilidad"],  # Hearing loop (no specific tag, use general)
+    "3": ["accesibilidad", "lengua-de-signos"],  # Sign language
+    "4": ["accesibilidad", "braille"],  # Braille
+    "5": ["accesibilidad", "audiodescripcion"],  # Audio description
+    "6": ["accesibilidad"],  # Easy reading (no specific tag, use general)
+}
+
+
+def get_nested_value(data: dict, path: str) -> Any:
+    """Get value from nested dict using dot notation."""
+    keys = path.split(".")
+    value = data
+    for key in keys:
+        if isinstance(value, dict):
+            value = value.get(key)
+        else:
+            return None
+        if value is None:
+            return None
+    return value
+
+
+def extract_district_name(district_uri: str | None) -> str | None:
+    """Extract district name from URI.
+
+    Example: ".../Distrito/VillaDeVallecas" -> "Villa de Vallecas"
+    """
+    if not district_uri:
+        return None
+
+    parts = district_uri.rstrip("/").split("/")
+    if "Distrito" in parts:
+        idx = parts.index("Distrito")
+        if idx + 1 < len(parts):
+            # Convert CamelCase to spaces
+            name = parts[idx + 1]
+            # Insert space before capitals
+            name = re.sub(r'([a-z])([A-Z])', r'\1 \2', name)
+            return name
+    return None
+
+
+@register_adapter("madrid_datos_abiertos")
+class MadridDatosAbiertosAdapter(BaseAdapter):
+    """Adapter for Madrid Open Data cultural events API."""
+
+    source_id = "madrid_datos_abiertos"
+    source_name = "Madrid Datos Abiertos - Eventos Culturales"
+    source_url = "https://datos.madrid.es/egob/catalogo/206974-0-agenda-eventos-culturales-100.json"
+    ccaa = "Comunidad de Madrid"
+    ccaa_code = "MD"
+    adapter_type = AdapterType.API
+
+    # Map Madrid API types to image-friendly keywords
+    TYPE_TO_IMAGE_KEYWORDS: dict[str, list[str]] = {
+        "teatroperformance": ["theater", "stage", "performance"],
+        "circomagia": ["circus", "magic", "show"],
+        "musica": ["concert", "music", "live"],
+        "musicaclasica": ["orchestra", "classical", "concert hall"],
+        "musicamoderna": ["concert", "rock", "live music"],
+        "danza": ["dance", "ballet", "performance"],
+        "danzabaile": ["dance", "ballroom", "dancing"],
+        "danzacontemporanea": ["contemporary dance", "modern dance", "performance"],
+        "cine": ["cinema", "movie", "film"],
+        "cineactividadesaudiovisuales": ["cinema", "film", "screening"],
+        "exposiciones": ["art", "gallery", "exhibition"],
+        "exposicionfotografia": ["photography", "gallery", "exhibition"],
+        "exposicionpintura": ["painting", "art gallery", "exhibition"],
+        "conferenciascoloquios": ["conference", "talk", "seminar"],
+        "cursostalleres": ["workshop", "learning", "classroom"],
+        "actividadesdeportivas": ["sports", "fitness", "outdoor"],
+        "cuentacuentostiteresmarionetas": ["puppets", "children", "storytelling"],
+        "recitalespresentacionesactosliterarios": ["books", "reading", "literature"],
+        "clubeslectura": ["books", "reading", "library"],
+        "navidad": ["christmas", "holiday", "celebration"],
+        "fiestascarnavales": ["carnival", "festival", "celebration"],
+        "actividadescallearteurbano": ["street art", "urban", "mural"],
+        "excursionesitinerariosvisitas": ["tour", "sightseeing", "city"],
+        "itinerariosotrasactividadesambientales": ["nature", "environment", "outdoor"],
+        "1ciudad21distritos": ["community", "neighborhood", "madrid"],
+    }
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._llm_enricher = get_llm_enricher()
+        self._image_provider = get_image_provider()
+        self._enrichments: dict[str, EventEnrichment] = {}
+
+    def _generate_basic_image_keywords(self, raw_data: dict) -> list[str]:
+        """Generate basic image keywords from event type (for events without LLM enrichment)."""
+        type_uri = raw_data.get("@type", "") or ""
+        type_name = type_uri.split("/")[-1].lower() if type_uri else ""
+        return self.TYPE_TO_IMAGE_KEYWORDS.get(type_name, ["event", "community", "gathering"])
+
+    async def fetch_events(self, enrich: bool = True, max_pages: int = 10) -> list[dict[str, Any]]:
+        """Fetch events from Madrid Open Data JSON API.
+
+        Args:
+            enrich: If True, run LLM enrichment on all events.
+                   Set to False when using run_batch (which enriches only paginated events).
+            max_pages: Ignored (API returns all events in single response). Kept for compatibility.
+        """
+        self.logger.info("fetching_madrid_api", url=self.source_url)
+
+        try:
+            response = await self.fetch_url(self.source_url)
+            content = response.text
+            # Clean invalid control characters (Madrid API has broken JSON sometimes)
+            content = re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', content)
+            data = json.loads(content)
+
+            events = data.get("@graph", [])
+            self.logger.info("fetched_events", count=len(events))
+
+            # Smart enrichment with LLM (batch processing) - only if enrich=True
+            if enrich and self._llm_enricher.is_enabled:
+                self._enrichments = self._llm_enricher.enrich_batch(events)
+                self.logger.info("llm_enrichments", count=len(self._enrichments))
+
+            return events
+
+        except Exception as e:
+            self.logger.error("fetch_error", error=str(e))
+            raise
+
+    def enrich_events(self, events: list[dict[str, Any]]) -> None:
+        """Run LLM enrichment on a subset of events (for batch processing).
+
+        This allows run_batch to enrich only the paginated events, not all 998.
+        """
+        if self._llm_enricher.is_enabled:
+            self._enrichments = self._llm_enricher.enrich_batch(events)
+            self.logger.info("llm_enrichments", count=len(self._enrichments))
+
+    def _determine_category_slug(
+        self,
+        type_uri: str,
+        title: str,
+        description: str,
+    ) -> str:
+        """Determine the DB category slug based on type and content.
+
+        Returns DB category slug: cultural, social, economica, politica, sanitaria, tecnologia
+        """
+        # Extract type name from URI
+        type_name = type_uri.rstrip("/").split("/")[-1] if type_uri else ""
+
+        # First check keyword overrides in title + description
+        content = (title + " " + description).lower()
+        for keyword, category_slug in KEYWORD_CATEGORY_OVERRIDES.items():
+            if keyword in content:
+                return category_slug
+
+        # Then use type mapping
+        if type_name in CATEGORY_TO_DB_SLUG:
+            return CATEGORY_TO_DB_SLUG[type_name]
+
+        # Default to cultural (most events from Madrid API are cultural)
+        return "cultural"
+
+    def _parse_accessibility(self, org_data: dict) -> tuple[str | None, list[str]]:
+        """Parse accessibility codes from organization data.
+
+        Returns:
+            Tuple of (raw_info, list_of_tag_slugs)
+        """
+        acc_raw = org_data.get("accesibility", "")
+        if not acc_raw:
+            return None, []
+
+        tags = []
+        codes = [c.strip() for c in str(acc_raw).split(",")]
+
+        for code in codes:
+            if code in ACCESSIBILITY_CODE_TO_TAGS:
+                tags.extend(ACCESSIBILITY_CODE_TO_TAGS[code])
+
+        # Remove duplicates
+        tags = list(dict.fromkeys(tags))
+
+        return acc_raw, tags
+
+    def _parse_organizer(self, org_data: dict) -> EventOrganizer | None:
+        """Parse organizer from organization data.
+
+        OrganizerType values must match Supabase enum:
+        empresa, asociacion, institucion, otro
+        """
+        name = org_data.get("organization-name", "").strip()
+        if not name:
+            return None
+
+        # Determine organizer type based on name keywords
+        name_lower = name.lower()
+        org_type = OrganizerType.OTRO
+
+        # Institución: gobierno, administración pública, centros públicos
+        if any(kw in name_lower for kw in ["ayuntamiento", "comunidad de madrid", "ministerio", "junta"]):
+            org_type = OrganizerType.INSTITUCION
+        elif any(kw in name_lower for kw in ["centro cultural", "centro sociocultural", "biblioteca", "museo"]):
+            org_type = OrganizerType.INSTITUCION
+        # Asociación: ONGs, colectivos, fundaciones
+        elif any(kw in name_lower for kw in ["asociación", "asociacion", "colectivo", "fundación", "fundacion"]):
+            org_type = OrganizerType.ASOCIACION
+        # Empresa: sociedades mercantiles
+        elif any(kw in name_lower for kw in ["s.l.", "s.a.", "sl", "sa", "empresa"]):
+            org_type = OrganizerType.EMPRESA
+
+        return EventOrganizer(name=name, type=org_type)
+
+    def _build_tags(
+        self,
+        type_uri: str,
+        audience: str,
+        accessibility_tags: list[str],
+        is_free: bool,
+        enrichment_tags: list[str] | None,
+    ) -> list[str]:
+        """Build list of tag slugs for the event."""
+        tags = []
+
+        # Add type-based tag
+        type_name = type_uri.rstrip("/").split("/")[-1] if type_uri else ""
+        type_tag_mapping = {
+            "TeatroPerformance": "teatro",
+            "CircoMagia": "magia",
+            "Musica": "musica",
+            "DanzaBaile": "danza",
+            "Exposiciones": "exposiciones",
+            "CineActividadesAudiovisuales": "cine",
+            "CuentacuentosTiteresMarionetas": "infantil",
+            "ConferenciasColoquios": "conferencias",
+            "CursosTalleres": "talleres",
+            "ActividadesDeportivas": "deportes",
+            "1ciudad21distritos": "distritos",
+        }
+        if type_name in type_tag_mapping:
+            tags.append(type_tag_mapping[type_name])
+
+        # Audience tag
+        if audience:
+            audience_lower = audience.lower()
+            if "infantil" in audience_lower or "niños" in audience_lower:
+                tags.append("infantil")
+            elif "familiar" in audience_lower:
+                tags.append("familiar")
+            elif "adultos" in audience_lower:
+                tags.append("adultos")
+
+        # Free events
+        if is_free:
+            tags.append("gratuito")
+
+        # Accessibility tags
+        tags.extend(accessibility_tags)
+
+        # LLM enrichment tags
+        if enrichment_tags:
+            tags.extend(enrichment_tags)
+
+        # Remove duplicates while preserving order
+        return list(dict.fromkeys(tags))
+
+    def _parse_recurrence(self, raw_data: dict) -> tuple[bool, str | None, list[str]]:
+        """Parse recurrence information.
+
+        Returns:
+            Tuple of (is_recurring, recurrence_rule, excluded_days)
+        """
+        recurrence = raw_data.get("recurrence", {})
+        excluded_days_str = raw_data.get("excluded-days", "")
+
+        if not recurrence:
+            return False, None, []
+
+        # Build RRULE from recurrence data
+        freq = recurrence.get("frequency", "").upper()
+        interval = recurrence.get("interval", 1)
+        days = recurrence.get("days", "")
+
+        if freq:
+            rule_parts = [f"FREQ={freq}"]
+            if interval > 1:
+                rule_parts.append(f"INTERVAL={interval}")
+            if days:
+                rule_parts.append(f"BYDAY={days}")
+            rule = ";".join(rule_parts)
+        else:
+            rule = None
+
+        # Parse excluded days
+        excluded = []
+        if excluded_days_str:
+            excluded = [d.strip() for d in excluded_days_str.split(";") if d.strip()]
+
+        return bool(recurrence), rule, excluded
+
+    def parse_event(self, raw_data: dict[str, Any]) -> EventCreate | None:
+        """Parse a single event from Madrid API format to EventCreate."""
+        try:
+            # Required fields
+            title = raw_data.get("title", "").strip()
+            if not title:
+                self.logger.debug("skip_no_title", data=str(raw_data)[:100])
+                return None
+
+            # Parse dates
+            dtstart = raw_data.get("dtstart", "")
+            start_date = self._parse_datetime(dtstart)
+            if not start_date:
+                self.logger.debug("skip_no_date", title=title)
+                return None
+
+            dtend = raw_data.get("dtend", "")
+            end_date = self._parse_datetime(dtend)
+
+            # Parse time
+            time_str = raw_data.get("time", "")
+            start_time = self._parse_time(time_str)
+
+            # Location details
+            venue_name = raw_data.get("event-location", "")
+            address = get_nested_value(raw_data, "address.area.street-address")
+            postal_code = get_nested_value(raw_data, "address.area.postal-code")
+            city = get_nested_value(raw_data, "address.area.locality") or "Madrid"
+            district_uri = get_nested_value(raw_data, "address.district.@id")
+            district = extract_district_name(district_uri)
+
+            # Coordinates
+            latitude = get_nested_value(raw_data, "location.latitude")
+            longitude = get_nested_value(raw_data, "location.longitude")
+
+            # Base category from type mapping (will be overridden by enrichment if available)
+            type_uri = raw_data.get("@type", "")
+            description = raw_data.get("description", "") or ""
+            base_category_slug = self._determine_category_slug(type_uri, title, description)
+
+            # Price
+            is_free = raw_data.get("free") == 1
+            price_info = raw_data.get("price", "") or None
+
+            # Organization and accessibility
+            org_data = raw_data.get("organization", {}) or {}
+            organizer = self._parse_organizer(org_data)
+            accessibility_raw, accessibility_tags = self._parse_accessibility(org_data)
+
+            # External ID and URL
+            external_id = f"madrid_{raw_data.get('id', '')}"
+            external_url = raw_data.get("link", "")
+
+            # Audience
+            audience = raw_data.get("audience", "") or ""
+
+            # Recurrence
+            is_recurring, recurrence_rule, excluded_days = self._parse_recurrence(raw_data)
+
+            # LLM enrichment - use smart enricher results
+            event_id = str(raw_data.get("id", ""))
+            enrichment = self._enrichments.get(event_id)
+
+            # Apply enrichment data (overrides base values)
+            summary = None
+            enrichment_tags: list[str] = []
+            image_keywords: list[str] = []
+            category_slug = base_category_slug
+
+            if enrichment:
+                # Use LLM category (smarter classification)
+                category_slug = enrichment.category_slug
+                summary = enrichment.summary
+                enrichment_tags = enrichment.tags or []
+                image_keywords = enrichment.image_keywords or []
+                self.logger.debug(
+                    "enrichment_applied",
+                    event_id=event_id,
+                    category=category_slug,
+                    confidence=enrichment.confidence,
+                )
+
+            # Resolve image from Unsplash using keywords
+            source_image_url = None
+            image_author = None
+            image_author_url = None
+            image_source_url = None
+
+            # Try to get image with multi-provider cascade (Unsplash -> Pexels -> Fallback)
+            image_result = None
+            keywords_to_use = image_keywords if image_keywords else self._generate_basic_image_keywords(raw_data)
+
+            if keywords_to_use:
+                image_result = self._image_provider.get_image_full(
+                    keywords=keywords_to_use,
+                    category=category_slug,
+                )
+
+            if image_result:
+                source_image_url = image_result.url
+                image_author = image_result.author
+                image_author_url = image_result.author_url
+                image_source_url = image_result.source_url
+            else:
+                # Use fallback image (no attribution needed)
+                source_image_url = self._image_provider.get_image(
+                    keywords=[],
+                    category=category_slug,
+                )
+
+            # Build tags
+            tags = self._build_tags(
+                type_uri=type_uri,
+                audience=audience,
+                accessibility_tags=accessibility_tags,
+                is_free=is_free,
+                enrichment_tags=enrichment_tags,
+            )
+
+            return EventCreate(
+                # Basic info
+                title=title,
+                description=description,
+                summary=summary,
+                start_date=start_date,
+                end_date=end_date,
+                start_time=start_time,
+
+                # Location
+                location_type=LocationType.PHYSICAL,
+                venue_name=venue_name,
+                address=address,
+                district=district,
+                city=city,
+                province="Madrid",
+                comunidad_autonoma=self.ccaa,
+                postal_code=postal_code,
+                latitude=latitude,
+                longitude=longitude,
+
+                # Category (from LLM enrichment or fallback)
+                category_slug=category_slug,
+                category_name=type_uri.split("/")[-1] if type_uri else None,
+
+                # Organizer
+                organizer=organizer,
+
+                # Metadata
+                source_id=self.source_id,
+                external_url=external_url,
+                external_id=external_id,
+                source_image_url=source_image_url,  # Resolved from Unsplash
+                image_author=image_author,
+                image_author_url=image_author_url,
+                image_source_url=image_source_url,
+                tags=tags,
+
+                # Price
+                is_free=is_free,
+                price_info=price_info,
+
+                # Accessibility
+                accessibility_info=accessibility_raw,
+                accessibility_tags=accessibility_tags,
+
+                # Recurrence
+                is_recurring=is_recurring,
+                recurrence_rule=recurrence_rule,
+                excluded_days=excluded_days,
+            )
+
+        except Exception as e:
+            self.logger.warning("parse_error", error=str(e), title=raw_data.get("title", "")[:50])
+            return None
+
+    def _parse_datetime(self, dt_str: str) -> date | None:
+        """Parse datetime string from API format."""
+        if not dt_str:
+            return None
+
+        try:
+            dt_str = dt_str.split(".")[0]
+            dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+            return dt.date()
+        except ValueError:
+            try:
+                dt = datetime.strptime(dt_str[:10], "%Y-%m-%d")
+                return dt.date()
+            except ValueError:
+                return None
+
+    def _parse_time(self, time_str: str) -> time | None:
+        """Parse time string from API."""
+        if not time_str:
+            return None
+
+        try:
+            parts = time_str.split(":")
+            hour = int(parts[0])
+            minute = int(parts[1]) if len(parts) > 1 else 0
+            return datetime.strptime(f"{hour:02d}:{minute:02d}", "%H:%M").time()
+        except (ValueError, IndexError):
+            return None

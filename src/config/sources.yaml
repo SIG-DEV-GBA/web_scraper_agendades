@@ -1,0 +1,300 @@
+# Configuración de fuentes de eventos por Comunidad Autónoma
+# Cada fuente tiene un adapter_type que determina cómo se scrapea:
+#   - api: La fuente expone una API REST/GraphQL
+#   - static: HTML estático, se usa requests + BeautifulSoup
+#   - dynamic: SPA/JS pesado, se usa Playwright
+
+# Configuración global de LLM para enriquecimiento
+llm_config:
+  enabled: false  # Activar con LLM_ENABLED=true en .env
+  provider: "groq"
+  model: "llama-3.3-70b-versatile"
+  # Campos que el LLM puede enriquecer
+  enrich_fields:
+    - summary  # Resumen corto de descripción larga
+    - category  # Clasificación normalizada
+    - tags  # Keywords extraídos
+  # Solo usar LLM si description > N caracteres
+  min_description_length: 200
+  # Máximo de eventos a procesar con LLM por ejecución
+  max_llm_events: 100
+
+sources:
+  # ========================================
+  # MADRID - Datos Abiertos (API JSON)
+  # ========================================
+  - source_id: madrid_datos_abiertos
+    name: "Madrid Datos Abiertos - Eventos Culturales"
+    ccaa: "Comunidad de Madrid"
+    ccaa_code: "MD"
+    url: "https://datos.madrid.es/egob/catalogo/206974-0-agenda-eventos-culturales-100.json"
+    adapter_type: api
+    enabled: true
+    schedule: "0 6 * * *"  # Diario a las 6:00
+    priority: 1
+    notes: "API oficial de datos abiertos del Ayuntamiento de Madrid - próximos 100 días"
+    # Config específica del adapter
+    config:
+      format: "json-ld"
+      data_path: "@graph"  # Los eventos están en @graph
+      use_llm: true  # Usar LLM para enriquecer si está habilitado globalmente
+      # Mapeo de campos API -> modelo interno
+      field_mapping:
+        external_id: "id"
+        title: "title"
+        description: "description"
+        start_date: "dtstart"
+        end_date: "dtend"
+        location_name: "event-location"
+        is_free: "free"
+        price: "price"
+        url: "link"
+        audience: "audience"
+        latitude: "location.latitude"
+        longitude: "location.longitude"
+        address: "address.area.street-address"
+        postal_code: "address.area.postal-code"
+        district: "address.district.@id"
+        category_raw: "@type"
+
+  # ========================================
+  # MADRID - Agenda general (backup)
+  # ========================================
+  - source_id: madrid_agenda_general
+    name: "Madrid Datos Abiertos - Agenda Actividades"
+    ccaa: "Comunidad de Madrid"
+    ccaa_code: "MD"
+    url: "https://datos.madrid.es/egob/catalogo/300107-0-agenda-actividades-eventos.json"
+    adapter_type: api
+    enabled: false  # Backup, activar si la principal falla
+    schedule: "0 7 * * *"
+    priority: 2
+    notes: "Agenda general de actividades - incluye más tipos de eventos"
+    config:
+      format: "json-ld"
+      data_path: "@graph"
+      use_llm: true
+
+  # ========================================
+  # CATALUÑA
+  # ========================================
+  - source_id: barcelona_cultura
+    name: "Barcelona Cultura"
+    ccaa: "Cataluña"
+    ccaa_code: "CT"
+    url: "https://www.barcelona.cat/es/que-hacer-en-bcn"
+    adapter_type: dynamic
+    enabled: false
+    schedule: "0 7 * * *"
+    priority: 1
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # ANDALUCÍA
+  # ========================================
+  - source_id: andalucia_cultura
+    name: "Andalucía Tu Cultura"
+    ccaa: "Andalucía"
+    ccaa_code: "AN"
+    url: "https://www.juntadeandalucia.es/cultura"
+    adapter_type: static
+    enabled: false
+    schedule: "0 6 * * *"
+    priority: 2
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # PAÍS VASCO
+  # ========================================
+  - source_id: euskadi_kultura
+    name: "Euskadi Kultura"
+    ccaa: "País Vasco"
+    ccaa_code: "PV"
+    url: "https://www.kultura.ejgv.euskadi.eus"
+    adapter_type: static
+    enabled: false
+    schedule: "0 7 * * *"
+    priority: 2
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # VALENCIA
+  # ========================================
+  - source_id: valencia_cultura
+    name: "Valencia Cultura"
+    ccaa: "Comunidad Valenciana"
+    ccaa_code: "VC"
+    url: "https://www.valencia.es/es/cas/cultura"
+    adapter_type: dynamic
+    enabled: false
+    schedule: "0 6 * * *"
+    priority: 2
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # GALICIA
+  # ========================================
+  - source_id: galicia_cultura
+    name: "Galicia Cultura"
+    ccaa: "Galicia"
+    ccaa_code: "GA"
+    url: "https://www.cultura.gal"
+    adapter_type: static
+    enabled: false
+    schedule: "0 8 * * *"
+    priority: 3
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # CASTILLA Y LEÓN
+  # ========================================
+  - source_id: castilla_leon_cultura
+    name: "Castilla y León Cultura"
+    ccaa: "Castilla y León"
+    ccaa_code: "CL"
+    url: "https://cultura.jcyl.es"
+    adapter_type: static
+    enabled: false
+    schedule: "0 8 * * *"
+    priority: 3
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # CANARIAS
+  # ========================================
+  - source_id: canarias_cultura
+    name: "Canarias Cultura"
+    ccaa: "Canarias"
+    ccaa_code: "CN"
+    url: "https://www.gobiernodecanarias.org/cultura"
+    adapter_type: static
+    enabled: false
+    schedule: "0 9 * * *"
+    priority: 3
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # ARAGÓN
+  # ========================================
+  - source_id: aragon_cultura
+    name: "Aragón Cultura"
+    ccaa: "Aragón"
+    ccaa_code: "AR"
+    url: "https://www.aragon.es/cultura"
+    adapter_type: static
+    enabled: false
+    schedule: "0 7 * * *"
+    priority: 3
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # CASTILLA-LA MANCHA
+  # ========================================
+  - source_id: clm_cultura
+    name: "Castilla-La Mancha Cultura"
+    ccaa: "Castilla-La Mancha"
+    ccaa_code: "CM"
+    url: "https://cultura.castillalamancha.es"
+    adapter_type: static
+    enabled: false
+    schedule: "0 8 * * *"
+    priority: 4
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # MURCIA
+  # ========================================
+  - source_id: murcia_cultura
+    name: "Murcia Cultura"
+    ccaa: "Región de Murcia"
+    ccaa_code: "MC"
+    url: "https://www.carm.es/web/pagina?IDCONTENIDO=63&IDTIPO=140"
+    adapter_type: static
+    enabled: false
+    schedule: "0 8 * * *"
+    priority: 4
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # EXTREMADURA
+  # ========================================
+  - source_id: extremadura_cultura
+    name: "Extremadura Cultura"
+    ccaa: "Extremadura"
+    ccaa_code: "EX"
+    url: "https://www.juntaex.es/cultura"
+    adapter_type: static
+    enabled: false
+    schedule: "0 9 * * *"
+    priority: 4
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # ISLAS BALEARES
+  # ========================================
+  - source_id: baleares_cultura
+    name: "Islas Baleares Cultura"
+    ccaa: "Islas Baleares"
+    ccaa_code: "IB"
+    url: "https://www.caib.es/govern/organigrama/area.do?coduo=7"
+    adapter_type: static
+    enabled: false
+    schedule: "0 9 * * *"
+    priority: 4
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # ASTURIAS
+  # ========================================
+  - source_id: asturias_cultura
+    name: "Asturias Cultura"
+    ccaa: "Principado de Asturias"
+    ccaa_code: "AS"
+    url: "https://www.asturias.es/cultura"
+    adapter_type: static
+    enabled: false
+    schedule: "0 8 * * *"
+    priority: 4
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # NAVARRA
+  # ========================================
+  - source_id: navarra_cultura
+    name: "Navarra Cultura"
+    ccaa: "Comunidad Foral de Navarra"
+    ccaa_code: "NC"
+    url: "https://www.navarra.es/es/cultura"
+    adapter_type: static
+    enabled: false
+    schedule: "0 7 * * *"
+    priority: 4
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # CANTABRIA
+  # ========================================
+  - source_id: cantabria_cultura
+    name: "Cantabria Cultura"
+    ccaa: "Cantabria"
+    ccaa_code: "CB"
+    url: "https://www.culturadecantabria.com"
+    adapter_type: static
+    enabled: false
+    schedule: "0 8 * * *"
+    priority: 5
+    notes: "Pendiente de implementar"
+
+  # ========================================
+  # LA RIOJA
+  # ========================================
+  - source_id: rioja_cultura
+    name: "La Rioja Cultura"
+    ccaa: "La Rioja"
+    ccaa_code: "RI"
+    url: "https://www.larioja.org/cultura"
+    adapter_type: static
+    enabled: false
+    schedule: "0 9 * * *"
+    priority: 5
+    notes: "Pendiente de implementar"
