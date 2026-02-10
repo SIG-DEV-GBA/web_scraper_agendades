@@ -147,17 +147,48 @@ def is_duplicate(
     return False
 
 
+def find_duplicate_index(
+    event: EventCreate,
+    existing_events: list[EventCreate],
+    title_threshold: float = 0.85,
+) -> int | None:
+    """Find the index of a duplicate event in the list.
+
+    Returns:
+        Index of duplicate event, or None if no duplicate found
+    """
+    for i, existing in enumerate(existing_events):
+        if event.start_date != existing.start_date:
+            continue
+
+        similarity = title_similarity(event.title, existing.title)
+        if similarity < title_threshold:
+            continue
+
+        if event.venue_name and existing.venue_name:
+            venue_similarity = title_similarity(event.venue_name, existing.venue_name)
+            if venue_similarity < 0.7:
+                continue
+
+        return i
+
+    return None
+
+
 def deduplicate_batch(
     events: list[EventCreate],
     title_threshold: float = 0.85,
+    merge_categories: bool = True,
 ) -> tuple[list[EventCreate], list[EventCreate]]:
     """Remove duplicates from a batch of events.
 
     Keeps the first occurrence of each unique event.
+    If merge_categories=True, merges category_slugs from duplicates.
 
     Args:
         events: List of events to deduplicate
         title_threshold: Minimum title similarity for duplicate detection
+        merge_categories: Whether to merge categories from duplicates
 
     Returns:
         Tuple of (unique_events, duplicate_events)
@@ -166,8 +197,26 @@ def deduplicate_batch(
     duplicates: list[EventCreate] = []
 
     for event in events:
-        if is_duplicate(event, unique, title_threshold):
+        dup_idx = find_duplicate_index(event, unique, title_threshold)
+
+        if dup_idx is not None:
             duplicates.append(event)
+
+            # Merge categories if enabled
+            if merge_categories and event.category_slugs:
+                existing = unique[dup_idx]
+                existing_cats = set(existing.category_slugs or [])
+                new_cats = set(event.category_slugs or [])
+                merged = existing_cats | new_cats
+
+                if merged != existing_cats:
+                    unique[dup_idx].category_slugs = list(merged)
+                    logger.debug(
+                        "Merged categories",
+                        title=existing.title[:50],
+                        original=list(existing_cats),
+                        merged=list(merged),
+                    )
         else:
             unique.append(event)
 

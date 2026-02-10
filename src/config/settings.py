@@ -48,10 +48,10 @@ class Settings(BaseSettings):
     )
     debug: bool = Field(default=False, alias="DEBUG")
 
-    # LLM (Groq) - Tiered model system
-    # ORO:    openai/gpt-oss-120b - Structured JSON, very fast
-    # PLATA:  llama-3.3-70b-versatile - Semi-structured HTML
-    # BRONCE: moonshotai/kimi-k2-instruct-0905 - Chaotic websites, deep reasoning
+    # LLM (Groq) - Tiered model system (all available on Groq free tier)
+    # ORO:    llama-3.3-70b-versatile - Structured JSON APIs
+    # PLATA:  llama-3.3-70b-versatile - Semi-structured HTML/RSS
+    # BRONCE: llama-3.3-70b-versatile - Web scraping (same model, simpler)
     # FILTER: llama-3.1-8b-instant - Pre-processing, discard junk
     groq_api_key: str | None = Field(default=None, alias="GROQ_API_KEY")
     groq_model: str = Field(default="llama-3.3-70b-versatile", alias="GROQ_MODEL")
@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     # Tiered models by source quality level
     llm_model_oro: str = Field(default="openai/gpt-oss-120b", alias="LLM_MODEL_ORO")
     llm_model_plata: str = Field(default="llama-3.3-70b-versatile", alias="LLM_MODEL_PLATA")
-    llm_model_bronce: str = Field(default="moonshotai/kimi-k2-instruct-0905", alias="LLM_MODEL_BRONCE")
+    llm_model_bronce: str = Field(default="llama-3.3-70b-versatile", alias="LLM_MODEL_BRONCE")
     llm_model_filter: str = Field(default="llama-3.1-8b-instant", alias="LLM_MODEL_FILTER")
 
     # Ollama (local/self-hosted LLM - for testing, no rate limits)

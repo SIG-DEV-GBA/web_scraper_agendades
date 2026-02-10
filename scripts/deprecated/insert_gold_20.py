@@ -82,6 +82,12 @@ async def main():
                             event.price = enr.price
                         if enr.price_details:
                             event.price_info = enr.price_details
+                        else:
+                            event.price_info = None  # No generic text
+
+                    # If no price_info but we have official URL, put it in price_info
+                    if not event.price_info and event.registration_url:
+                        event.price_info = event.registration_url
 
                 print(f"  Enriched: {len(enrichments)} events")
             except Exception as ex:

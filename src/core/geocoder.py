@@ -6,6 +6,7 @@ Also uses CCAA API to resolve correct autonomous community for cities.
 
 import asyncio
 import hashlib
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -15,6 +16,92 @@ import httpx
 from src.logging.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Spanish address abbreviation mappings
+ADDRESS_ABBREVIATIONS = {
+    # Street types
+    r"\bC/\.?\s*": "Calle ",
+    r"\bC\.?\s+": "Calle ",
+    r"\bCl\.?\s+": "Calle ",
+    r"\bClle\.?\s+": "Calle ",
+    r"\bAv\.?\s+": "Avenida ",
+    r"\bAvda\.?\s+": "Avenida ",
+    r"\bAvd\.?\s+": "Avenida ",
+    r"\bPl\.?\s+": "Plaza ",
+    r"\bPza\.?\s+": "Plaza ",
+    r"\bPlza\.?\s+": "Plaza ",
+    r"\bCtra\.?\s+": "Carretera ",
+    r"\bCrta\.?\s+": "Carretera ",
+    r"\bPº\.?\s*": "Paseo ",
+    r"\bPso\.?\s+": "Paseo ",
+    r"\bPseo\.?\s+": "Paseo ",
+    r"\bRda\.?\s+": "Ronda ",
+    r"\bUrb\.?\s+": "Urbanización ",
+    r"\bEd\.?\s+": "Edificio ",
+    r"\bEdif\.?\s+": "Edificio ",
+    r"\bPol\.?\s*Ind\.?\s+": "Polígono Industrial ",
+    r"\bBlq\.?\s+": "Bloque ",
+    r"\bTrav\.?\s+": "Travesía ",
+    r"\bPje\.?\s+": "Pasaje ",
+    r"\bGlta\.?\s+": "Glorieta ",
+    r"\bCjo\.?\s+": "Callejón ",
+    r"\bBda\.?\s+": "Barriada ",
+    r"\bPta\.?\s+": "Puerta ",
+    r"\bEsc\.?\s+": "Escalera ",
+    # Numbers and positions
+    r"\bs/n\b": "sin número",
+    r"\bS/N\b": "sin número",
+    r"\bNº\.?\s*": "número ",
+    r"\bnº\.?\s*": "número ",
+    r"\bnum\.?\s*": "número ",
+    r"\bdcha\.?\b": "derecha",
+    r"\bDcha\.?\b": "derecha",
+    r"\bizda\.?\b": "izquierda",
+    r"\bizq\.?\b": "izquierda",
+    r"\bIzda\.?\b": "izquierda",
+    r"\bIzq\.?\b": "izquierda",
+    r"\bbjo\.?\b": "bajo",
+    r"\bBjo\.?\b": "bajo",
+    r"\bdup\.?\b": "duplicado",
+    r"\bDup\.?\b": "duplicado",
+    # Common venue abbreviations
+    r"\bCasa de la Cult\.?\b": "Casa de la Cultura",
+    r"\bAudit\.?\b": "Auditorio",
+    r"\bBibl\.?\b": "Biblioteca",
+    r"\bCtro\.?\s+": "Centro ",
+    r"\bCtr\.?\s+": "Centro ",
+}
+
+
+def normalize_address(text: str | None) -> str | None:
+    """Normalize a Spanish address by expanding abbreviations.
+
+    This improves geocoding accuracy by converting common abbreviations
+    like "C/" to "Calle", "Av." to "Avenida", etc.
+
+    Args:
+        text: Address or venue name to normalize
+
+    Returns:
+        Normalized text with abbreviations expanded, or None if input was None
+    """
+    if not text:
+        return text
+
+    result = text
+
+    # Apply all abbreviation expansions
+    for pattern, replacement in ADDRESS_ABBREVIATIONS.items():
+        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
+
+    # Clean up multiple spaces
+    result = re.sub(r"\s+", " ", result).strip()
+
+    # Log if changes were made
+    if result != text:
+        logger.debug("address_normalized", original=text[:50], normalized=result[:50])
+
+    return result
 
 # Nominatim requires respectful usage:
 # - Max 1 request per second
@@ -73,14 +160,16 @@ class NominatimGeocoder:
             await self._http_client.aclose()
             self._http_client = None
 
-    async def _resolve_ccaa(self, city: str | None) -> str | None:
+    async def _resolve_ccaa(self, city: str | None, province: str | None = None) -> str | None:
         """Resolve the correct CCAA for a city using the CCAA API.
 
         Uses the municipios endpoint to find exact matches, prioritizing
         larger/more important municipalities over small localities.
+        If province is provided, uses it to disambiguate cities with same name.
 
         Args:
             city: City name to look up
+            province: Province name to help disambiguate (optional)
 
         Returns:
             CCAA name if found, None otherwise
@@ -89,10 +178,14 @@ class NominatimGeocoder:
             return None
 
         city_lower = city.lower().strip()
+        province_lower = province.lower().strip() if province else None
+
+        # Include province in cache key for disambiguation
+        cache_key = f"{city_lower}|{province_lower or ''}"
 
         # Check cache first
-        if city_lower in self._ccaa_cache:
-            return self._ccaa_cache[city_lower]
+        if cache_key in self._ccaa_cache:
+            return self._ccaa_cache[cache_key]
 
         client = await self.get_client()
 
@@ -102,39 +195,64 @@ class NominatimGeocoder:
             data = response.json()
 
             results = data.get("results", {})
-
-            # Priority 1: Exact match in municipios (most reliable)
             municipios = results.get("municipios", [])
+
+            # Priority 1: Exact match in municipios with matching province (if provided)
+            if province_lower:
+                for muni in municipios:
+                    if muni.get("nombre", "").lower() == city_lower:
+                        muni_prov = muni.get("provincia", "").lower()
+                        if province_lower in muni_prov or muni_prov in province_lower:
+                            ccaa = muni.get("comunidad")
+                            if ccaa:
+                                logger.debug("ccaa_resolved_municipio_with_province", city=city, province=province, ccaa=ccaa)
+                                self._ccaa_cache[cache_key] = ccaa
+                                return ccaa
+
+            # Priority 2: Exact match in municipios (without province check)
             for muni in municipios:
                 if muni.get("nombre", "").lower() == city_lower:
                     ccaa = muni.get("comunidad")
                     if ccaa:
                         logger.debug("ccaa_resolved_municipio", city=city, ccaa=ccaa)
-                        self._ccaa_cache[city_lower] = ccaa
+                        self._ccaa_cache[cache_key] = ccaa
                         return ccaa
 
-            # Priority 2: Exact match in provincias
+            # Priority 3: Exact match in provincias
             provincias = results.get("provincias", [])
             for prov in provincias:
                 if prov.get("nombre", "").lower() == city_lower:
                     ccaa = prov.get("comunidad")
                     if ccaa:
                         logger.debug("ccaa_resolved_provincia", city=city, ccaa=ccaa)
-                        self._ccaa_cache[city_lower] = ccaa
+                        self._ccaa_cache[cache_key] = ccaa
                         return ccaa
 
-            # Priority 3: First municipio that contains the city name
-            # (handles cases like "Las Palmas de Gran Canaria" searched as "Las Palmas")
-            for muni in municipios:
+            # Priority 4: Partial match with province validation (if provided)
+            # This avoids "Santa Cruz" matching "Santa Cruz de Marchena" when province is "Tenerife"
+            if province_lower:
+                for muni in municipios:
+                    muni_prov = muni.get("provincia", "").lower()
+                    if province_lower in muni_prov or muni_prov in province_lower:
+                        ccaa = muni.get("comunidad")
+                        if ccaa:
+                            logger.debug("ccaa_resolved_partial_with_province", city=city, province=province, ccaa=ccaa, municipio=muni.get("nombre"))
+                            self._ccaa_cache[cache_key] = ccaa
+                            return ccaa
+
+            # Priority 5: First municipio (last resort - may be wrong for ambiguous names)
+            # Only use if no province provided and exact match failed
+            if not province_lower and municipios:
+                muni = municipios[0]
                 ccaa = muni.get("comunidad")
                 if ccaa:
                     logger.debug("ccaa_resolved_partial", city=city, ccaa=ccaa, municipio=muni.get("nombre"))
-                    self._ccaa_cache[city_lower] = ccaa
+                    self._ccaa_cache[cache_key] = ccaa
                     return ccaa
 
             # Not found
             logger.debug("ccaa_not_found", city=city)
-            self._ccaa_cache[city_lower] = None
+            self._ccaa_cache[cache_key] = None
             return None
 
         except Exception as e:
@@ -248,6 +366,8 @@ class NominatimGeocoder:
         If the resolved CCAA differs from the passed one, uses the correct one
         to avoid geocoding errors (e.g., "Madrid, Andalucía" finding a small village).
 
+        Normalizes addresses by expanding Spanish abbreviations (C/ → Calle, etc.)
+
         Tries from most specific to least specific:
         1. venue_name + city + province
         2. address + city + province
@@ -267,8 +387,12 @@ class NominatimGeocoder:
         Returns:
             GeocodingResult with detected_ccaa set if city was resolved
         """
-        # Resolve the correct CCAA for this city
-        detected_ccaa = await self._resolve_ccaa(city)
+        # Normalize address abbreviations for better geocoding
+        venue_name = normalize_address(venue_name)
+        address = normalize_address(address)
+
+        # Resolve the correct CCAA for this city (use province to disambiguate)
+        detected_ccaa = await self._resolve_ccaa(city, province)
 
         # If the resolved CCAA differs from source, log a warning
         ccaa_mismatch = False

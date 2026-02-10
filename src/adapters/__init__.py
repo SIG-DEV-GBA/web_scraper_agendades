@@ -48,5 +48,13 @@ def _ensure_adapters_loaded() -> None:
     _adapters_loaded = True
 
     # Import adapter modules to trigger registration
-    from src.adapters import gold_api_adapter  # noqa: F401 - Gold (API/JSON)
-    from src.adapters import silver_rss_adapter  # noqa: F401 - Silver (RSS)
+    # Gold tier (structured APIs)
+    from src.adapters import gold_api_adapter  # noqa: F401
+    # Silver tier (RSS/iCal)
+    from src.adapters import silver_rss_adapter  # noqa: F401
+    # Bronze tier (HTML scraping)
+    from src.adapters.bronze import navarra  # noqa: F401
+    # Bronze tier - Generic scraper (CLM, Asturias, La Rioja, Badajoz, etc.)
+    from src.adapters import bronze_scraper_adapter  # noqa: F401
+    # Bronze tier - Viralagenda (multiple CCAA)
+    from src.adapters.bronze.viralagenda import base as viralagenda_base  # noqa: F401

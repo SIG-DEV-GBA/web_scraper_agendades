@@ -21,24 +21,12 @@ from typing import Any
 
 from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
-from src.core.event_model import EventCreate, EventOrganizer, LocationType, OrganizerType
+from src.core.event_model import EventAccessibility, EventContact, EventCreate, EventOrganizer, LocationType, OrganizerType
 
 
-class PaginationType(str, Enum):
-    """Pagination strategy for each API."""
-
-    NONE = "none"  # No pagination, single request
-    OFFSET_LIMIT = "offset_limit"  # Uses offset + limit params
-    PAGE = "page"  # Uses _page param (Euskadi style)
-    SOCRATA = "socrata"  # Uses $offset + $limit (Socrata/SODA)
-
-
-class SourceTier(str, Enum):
-    """Quality tier of data source - determines which LLM model to use."""
-
-    ORO = "oro"  # Clean JSON APIs - use gpt-oss-120b (fast, structured)
-    PLATA = "plata"  # Semi-structured HTML - use llama-3.3-70b (balanced)
-    BRONCE = "bronce"  # Chaotic websites - use kimi-k2 (deep reasoning)
+# Import from centralized config to avoid duplication
+from src.config.sources import PaginationType
+from src.core.llm_enricher import EnricherTier as SourceTier  # Alias for backward compat
 
 
 @dataclass
@@ -104,7 +92,7 @@ GOLD_SOURCES: dict[str, GoldSourceConfig] = {
         date_format="%Y-%m-%dT%H:%M:%S.%f",
         free_value="Si",
         free_field="gratuita",
-        image_url_prefix="https://gencat.cat",
+        image_url_prefix="https://agenda.cultura.gencat.cat",
         field_mappings={
             "codi": "external_id",
             "denominaci": "title",
@@ -124,6 +112,12 @@ GOLD_SOURCES: dict[str, GoldSourceConfig] = {
             "tags_categor_es": "category_tags",
             "imatges": "images",
             "linkbotoentrades": "external_url",
+            "subt_tol": "summary",  # Subtitle as summary
+            "url": "organizer_url",  # Venue/organizer website
+            "email": "contact_email",  # Contact email
+            "tel_fon": "contact_phone",  # Contact phone
+            "modalitat": "modality_text",  # "Presencial", "Online", "Híbrid"
+            "destacada": "is_featured_text",  # "Si" / "No"
         },
     ),
     "euskadi_kulturklik": GoldSourceConfig(
@@ -154,6 +148,9 @@ GOLD_SOURCES: dict[str, GoldSourceConfig] = {
             "images": "images",
             "purchaseUrlEs": "external_url",
             "provinceNoraCode": "province_code",
+            "companyEs": "organizer_name",
+            "sourceNameEs": "organizer_source",  # Fallback organizer name
+            "sourceUrlEs": "organizer_url",  # Organizer/source website
         },
     ),
     "castilla_leon_agenda": GoldSourceConfig(
@@ -198,28 +195,34 @@ GOLD_SOURCES: dict[str, GoldSourceConfig] = {
     "andalucia_agenda": GoldSourceConfig(
         slug="andalucia_agenda",
         name="Agenda de Eventos Junta de Andalucía",
-        url="https://datos.juntadeandalucia.es/api/v0/schedule/all?format=json",
+        # Nueva API más estable (contentapi) - ordena por fecha desc para eventos futuros
+        url="https://www.juntadeandalucia.es/ssdigitales/datasets/contentapi/1.0.0/search/agenda.json?_source=data&sort=date:desc",
         ccaa="Andalucía",
         ccaa_code="AN",
-        pagination_type=PaginationType.NONE,  # Returns all in one response
-        items_path="",  # Root is array
+        pagination_type=PaginationType.OFFSET_LIMIT,
+        page_size=50,  # Máximo permitido por la API
+        offset_param="from",
+        limit_param="size",
+        items_path="resultado",  # Los eventos están en "resultado"
+        total_count_path="numResultados",
         date_format="%Y-%m-%d",
         free_value="Gratuito",
         image_url_prefix="https://www.juntadeandalucia.es",
+        # Datos aplanados por _preprocess_andalucia
         field_mappings={
-            "id": "external_id",
+            "external_id": "external_id",
             "title": "title",
             "description": "description",
-            "date_registration": "start_date",  # Array with start_date_registration inside
-            "schedule": "time_info",
-            "cost": "price_info",
+            "start_date": "start_date",
+            "end_date": "end_date",
+            "time_info": "time_info",
+            "price_info": "price_info",
             "address": "address",
-            "location": "city",
-            "province": "province_array",
-            "organizers": "organizer_name",
-            "image": "images_array",
-            "themes": "category_array",
-            "coordinates": "coordinates_array",
+            "city": "city",
+            "province": "province",
+            "category_name": "category_name",
+            "image_url": "image_url",
+            "external_url": "external_url",
         },
     ),
     "madrid_datos_abiertos": GoldSourceConfig(
@@ -250,6 +253,7 @@ GOLD_SOURCES: dict[str, GoldSourceConfig] = {
             "location.longitude": "longitude",
             "@type": "category_uri",
             "organization.organization-name": "organizer_name",
+            "organization.accesibility": "accessibility_codes",
             "link": "external_url",
             "audience": "audience",
         },
@@ -281,6 +285,39 @@ GOLD_SOURCES: dict[str, GoldSourceConfig] = {
             "web": "external_url",
         },
     ),
+    "zaragoza_cultura": GoldSourceConfig(
+        slug="zaragoza_cultura",
+        name="Agenda Cultural de Zaragoza",
+        url="https://www.zaragoza.es/sede/servicio/cultura.json",
+        ccaa="Aragón",
+        ccaa_code="AR",
+        pagination_type=PaginationType.NONE,
+        # Response has featuredEvents + todayEvents arrays (handled specially)
+        items_path="__zaragoza_special__",  # Marker for special handling
+        default_province="Zaragoza",
+        datetime_format="%Y-%m-%dT%H:%M:%S",
+        field_mappings={
+            "id": "external_id",
+            "title": "title",
+            "description": "description",
+            "startDate": "start_date",
+            "endDate": "end_date",
+            "location": "venue_name",
+            "type": "category_name",
+            "image": "image_url",
+            "url": "external_url",
+            "priceComment": "price_info",
+            "geometry.coordinates": "utm_coordinates",
+            # Nested in subEvent[0].location
+            "subEvent.0.location.streetAddress": "address",
+            "subEvent.0.location.addressLocality": "city",
+            "subEvent.0.location.postalCode": "postal_code",
+            "subEvent.0.location.telephone": "contact_phone",
+            "subEvent.0.location.email": "contact_email",
+            # Category from category array
+            "category.0.title": "category_name_alt",
+        },
+    ),
 }
 
 # Number of fields per event for Valencia IVC (flat array format)
@@ -291,6 +328,20 @@ EUSKADI_PROVINCE_CODES = {
     "1": "Araba/Álava",
     "20": "Gipuzkoa",
     "48": "Bizkaia",
+}
+
+# Madrid accessibility codes (from datos.madrid.es)
+# Maps to event_accessibility table fields
+MADRID_ACCESSIBILITY_CODES = {
+    "1": {"field": "wheelchair_accessible", "desc": "Accesible para personas con discapacidad física"},
+    "2": {"field": "braille_materials", "desc": "Accesible para personas con discapacidad visual"},
+    "3": {"field": "hearing_loop", "desc": "Accesible para personas con discapacidad auditiva"},
+    "4": {"field": "other_facilities", "desc": "Accesible para personas con discapacidad intelectual"},
+    "5": {"field": "wheelchair_accessible", "desc": "Reserva de plazas para personas con movilidad reducida"},
+    "6": {"field": "hearing_loop", "desc": "Bucle de inducción magnética"},
+    "7": {"field": "sign_language", "desc": "Lengua de signos"},
+    "8": {"field": "other_facilities", "desc": "Subtitulado"},
+    "9": {"field": "other_facilities", "desc": "Audiodescripción"},
 }
 
 
@@ -308,6 +359,57 @@ def get_nested_value(data: dict, path: str) -> Any:
         if value is None:
             return None
     return value
+
+
+def remove_boilerplate(text: str) -> str:
+    """Remove common boilerplate phrases from event descriptions.
+
+    Removes:
+    - "Para más información..." and variants
+    - Generic contact phrases
+    - Promotional/spam text
+    - Disclaimers
+    - Redundant "visit our web" type phrases
+    """
+    # Patterns to remove (case insensitive)
+    # Each pattern removes the phrase and everything after it on the same line
+    boilerplate_patterns = [
+        # "Para más información" variants
+        r"para\s+(más|mas)\s+informaci[oó]n[^.\n]*[.\n]?",
+        r"m[aá]s\s+informaci[oó]n\s+en[^.\n]*[.\n]?",
+        r"informaci[oó]n\s+y\s+reservas?[^.\n]*[.\n]?",
+        # "Consulte/Visite nuestra web" variants
+        r"consulte?\s+(nuestra\s+)?(p[aá]gina\s+)?web[^.\n]*[.\n]?",
+        r"visite?\s+(nuestra\s+)?(p[aá]gina\s+)?web[^.\n]*[.\n]?",
+        r"en\s+(nuestra\s+)?(p[aá]gina\s+)?web[^.\n]*[.\n]?",
+        # Contact redirects
+        r"contacte?\s+(con\s+nosotros|nos)[^.\n]*[.\n]?",
+        r"ll[aá]me?(nos)?\s+(al|para)[^.\n]*[.\n]?",
+        r"esc[ií]?r[ií]?b[ae]?(nos)?\s+(a|al|un)[^.\n]*[.\n]?",
+        # Generic promotional
+        r"no\s+te\s+lo\s+pierdas[^.\n]*[.\n]?",
+        r"¡?te\s+esperamos!?[^.\n]*[.\n]?",
+        r"¡?no\s+faltes!?[^.\n]*[.\n]?",
+        r"¡?an[ií]mate!?[^.\n]*[.\n]?",
+        r"¡?ap[uú]ntate!?[^.\n]*[.\n]?",
+        # Disclaimers
+        r"la\s+organizaci[oó]n\s+se\s+reserva[^.\n]*[.\n]?",
+        r"sujeto\s+a\s+cambios[^.\n]*[.\n]?",
+        r"aforo\s+limitado[^.\n]*[.\n]?",
+        r"hasta\s+completar\s+aforo[^.\n]*[.\n]?",
+        # Redundant info phrases
+        r"pr[oó]ximamente\s+m[aá]s\s+(informaci[oó]n|detalles)[^.\n]*[.\n]?",
+        r"pendiente\s+de\s+confirmar[^.\n]*[.\n]?",
+        # Social media
+        r"s[ií]guenos\s+en[^.\n]*[.\n]?",
+        r"@\w+\s*(en\s+)?(twitter|instagram|facebook)[^.\n]*[.\n]?",
+    ]
+
+    clean = text
+    for pattern in boilerplate_patterns:
+        clean = re.sub(pattern, "", clean, flags=re.IGNORECASE)
+
+    return clean
 
 
 def clean_html(text: str | None) -> str | None:
@@ -353,6 +455,12 @@ def clean_html(text: str | None) -> str | None:
     # Clean up lines (strip each line)
     lines = [line.strip() for line in clean.split("\n")]
     clean = "\n".join(lines)
+
+    # Remove boilerplate phrases (Para más información, etc.)
+    clean = remove_boilerplate(clean)
+
+    # Re-normalize after boilerplate removal (may leave empty lines)
+    clean = re.sub(r"\n{3,}", "\n\n", clean)
 
     # Remove leading/trailing whitespace
     clean = clean.strip()
@@ -426,7 +534,8 @@ class GoldAPIAdapter(BaseAdapter):
                 # Standard offset/limit pagination
                 offset = 0
                 while True:
-                    url = f"{self.source_url}?{self.gold_config.limit_param}={self.gold_config.page_size}&{self.gold_config.offset_param}={offset}"
+                    separator = "&" if "?" in self.source_url else "?"
+                    url = f"{self.source_url}{separator}{self.gold_config.limit_param}={self.gold_config.page_size}&{self.gold_config.offset_param}={offset}"
                     data = await self._fetch_json(url)
                     items = self._extract_items(data)
 
@@ -486,6 +595,10 @@ class GoldAPIAdapter(BaseAdapter):
             # Root is the array
             return data if isinstance(data, list) else []
 
+        # Handle Zaragoza special structure (featuredEvents + todayEvents)
+        if self.gold_config.items_path == "__zaragoza_special__" and isinstance(data, dict):
+            return self._extract_zaragoza_events(data)
+
         items = get_nested_value(data, self.gold_config.items_path) if isinstance(data, dict) else None
         if not isinstance(items, list):
             return []
@@ -496,6 +609,45 @@ class GoldAPIAdapter(BaseAdapter):
             items = self._group_valencia_ivc_events(items)
 
         return items
+
+    def _extract_zaragoza_events(self, data: dict) -> list[dict]:
+        """Extract and deduplicate events from Zaragoza API response.
+
+        Zaragoza API returns:
+        - featuredEvents: highlighted events
+        - todayEvents: events happening today (may overlap with featured)
+        - featuredPrograms: program/festival info (not individual events)
+
+        Returns deduplicated list of events.
+        """
+        all_ids: set[int] = set()
+        events: list[dict] = []
+
+        # Get featured events first (usually more complete data)
+        featured = data.get("featuredEvents", [])
+        if isinstance(featured, list):
+            for event in featured:
+                eid = event.get("id")
+                if eid and eid not in all_ids:
+                    all_ids.add(eid)
+                    events.append(event)
+
+        # Add today events if not already in featured
+        today = data.get("todayEvents", [])
+        if isinstance(today, list):
+            for event in today:
+                eid = event.get("id")
+                if eid and eid not in all_ids:
+                    all_ids.add(eid)
+                    events.append(event)
+
+        self.logger.info(
+            "zaragoza_events_extracted",
+            featured=len(featured) if featured else 0,
+            today=len(today) if today else 0,
+            unique=len(events),
+        )
+        return events
 
     def _group_valencia_ivc_events(self, flat_items: list[dict]) -> list[dict]:
         """Group Valencia IVC flat array format into proper event objects.
@@ -524,6 +676,16 @@ class GoldAPIAdapter(BaseAdapter):
     def parse_event(self, raw_data: dict[str, Any]) -> EventCreate | None:
         """Parse a single event from API format to EventCreate."""
         try:
+            # Andalucía: preprocesar datos de la nueva API (contentapi)
+            if self.source_id == "andalucia_agenda":
+                raw_data = self._preprocess_andalucia(raw_data)
+                if not raw_data:
+                    return None
+
+            # Zaragoza: preprocesar datos (subEvent nested, UTM coords)
+            if self.source_id == "zaragoza_cultura":
+                raw_data = self._preprocess_zaragoza(raw_data)
+
             mappings = self.gold_config.field_mappings or {}
 
             # Get mapped values
@@ -555,6 +717,10 @@ class GoldAPIAdapter(BaseAdapter):
             end_time = self._parse_time(get_mapped("end_time"))
             time_info = get_mapped("time_info")
 
+            # Zaragoza: use preprocessed start_time from openingHours
+            if raw_data.get("__preprocessed") and start_time is None:
+                start_time = self._parse_time(raw_data.get("__start_time"))
+
             # If no direct start_time, try extracting from time_info text
             if start_time is None and time_info:
                 parsed_st, parsed_et = self._parse_time_from_info(str(time_info))
@@ -567,20 +733,64 @@ class GoldAPIAdapter(BaseAdapter):
             venue_name = clean_html(get_mapped("venue_name"))
             address = clean_html(get_mapped("address"))
             postal_code = get_mapped("postal_code")
-            city = get_mapped("city") or self._extract_city(raw_data)
-            province = get_mapped("province") or self._extract_province(raw_data)
             latitude = self._parse_coordinate(get_mapped("latitude") or get_mapped("latitude_alt"))
             longitude = self._parse_coordinate(get_mapped("longitude") or get_mapped("longitude_alt"))
 
-            # Price
-            price_info = get_mapped("price_info")
-            is_free = self._determine_is_free(raw_data, price_info)
+            # Zaragoza: use preprocessed values FIRST (before _extract_city which would return venue)
+            if raw_data.get("__preprocessed"):
+                venue_name = venue_name or raw_data.get("__venue_name")
+                address = address or raw_data.get("__address")
+                postal_code = postal_code or raw_data.get("__postal_code")
+                city = raw_data.get("__city") or "Zaragoza"  # Always use preprocessed or default
+                latitude = latitude or raw_data.get("__latitude")
+                longitude = longitude or raw_data.get("__longitude")
+                province = get_mapped("province") or self._extract_province(raw_data)
+            else:
+                city = get_mapped("city") or self._extract_city(raw_data)
+                province = get_mapped("province") or self._extract_province(raw_data)
+
+            # District/municipio - extract from Madrid's district URI
+            district = None
+            district_uri = get_mapped("district_uri")
+            if district_uri and "/Distrito/" in district_uri:
+                # URI format: .../Distrito/Moncloa-Aravaca
+                district = district_uri.split("/Distrito/")[-1].replace("-", " ")
+
+            # Price - always provide descriptive text for UI
+            price_info_raw = get_mapped("price_info")
+
+            # Extract registration URL from price_info HTML (e.g., Zaragoza <a href="...">)
+            registration_url_from_price = None
+            if price_info_raw and "<a " in str(price_info_raw).lower():
+                registration_url_from_price = self._extract_url_from_html(price_info_raw)
+
+            # Clean HTML from price_info before processing
+            price_info_clean = clean_html(price_info_raw) if price_info_raw else None
+
+            is_free = self._determine_is_free(raw_data, price_info_raw)
+
+            # Generate user-friendly price_info text (using cleaned version)
+            if is_free is True:
+                # Free event - use clean text if descriptive, else default
+                price_info = price_info_clean if price_info_clean else "Entrada gratuita"
+            elif is_free is False:
+                # Paid event - use clean text if available
+                price_info = price_info_clean if price_info_clean else "Consultar precio en web del organizador"
+            else:
+                # Unknown - provide default message
+                price_info = price_info_clean if price_info_clean else "Consultar en web del organizador"
 
             # Category
             category_name = get_mapped("category_name") or self._extract_category(raw_data)
+            # Zaragoza: use preprocessed category
+            if raw_data.get("__preprocessed") and not category_name:
+                category_name = raw_data.get("__category_name")
 
             # Image
             image_url = self._extract_image_url(raw_data)
+            # Zaragoza: use preprocessed image URL
+            if raw_data.get("__preprocessed") and not image_url:
+                image_url = raw_data.get("__image_url")
 
             # External ID and URL
             raw_external_id = get_mapped('external_id') or ''
@@ -594,9 +804,39 @@ class GoldAPIAdapter(BaseAdapter):
 
             external_url = get_mapped("external_url")
 
-            # Organizer
+            # Summary (short description/subtitle)
+            summary = clean_html(get_mapped("summary"))
+
+            # Organizer - try multiple sources
             organizer_name = get_mapped("organizer_name")
-            organizer = self._parse_organizer(organizer_name) if organizer_name else None
+            if not organizer_name:
+                # Fallback to sourceNameEs (Euskadi) or organizer_names (Andalucía)
+                organizer_name = get_mapped("organizer_source")
+            if not organizer_name:
+                # Andalucía: organizer_names is a list
+                org_names = raw_data.get("organizer_names", [])
+                if org_names and isinstance(org_names, list) and org_names[0]:
+                    organizer_name = org_names[0]
+
+            organizer_url = get_mapped("organizer_url")
+            organizer = self._parse_organizer(organizer_name, organizer_url) if organizer_name else None
+
+            # Accessibility
+            accessibility_info = self._extract_accessibility(raw_data)
+
+            # Contact info (Catalunya has email, tel_fon)
+            contact_email = get_mapped("contact_email")
+            contact_phone = get_mapped("contact_phone")
+            # Zaragoza: use preprocessed contact info
+            if raw_data.get("__preprocessed"):
+                contact_email = contact_email or raw_data.get("__contact_email")
+                contact_phone = contact_phone or raw_data.get("__contact_phone")
+            contact = None
+            if contact_email or contact_phone:
+                contact = EventContact(
+                    email=contact_email,
+                    phone=contact_phone,
+                )
 
             # Description
             description = clean_html(get_mapped("description"))
@@ -610,9 +850,9 @@ class GoldAPIAdapter(BaseAdapter):
             if not external_url and desc_urls["event_url"]:
                 external_url = desc_urls["event_url"]
 
-            # Registration URL: from description, or from ticket-type external_url
-            registration_url = desc_urls["registration_url"]
-            if not registration_url and external_url and self.source_id in ("euskadi_kulturklik", "catalunya_agenda"):
+            # Registration URL: from price_info HTML, description, or from ticket-type external_url
+            registration_url = registration_url_from_price or desc_urls["registration_url"]
+            if not registration_url and external_url and self.source_id in ("euskadi_kulturklik", "catalunya_agenda", "zaragoza_cultura"):
                 # These sources map ticket/purchase URLs as external_url
                 # Only copy if URL looks like a ticket/booking site
                 ticket_patterns = [
@@ -624,17 +864,35 @@ class GoldAPIAdapter(BaseAdapter):
                 if any(p in url_lower for p in ticket_patterns):
                     registration_url = external_url
 
+            # Parse modality (Catalunya: "Presencial", "Online", "Híbrid")
+            location_type = LocationType.PHYSICAL
+            modality_text = get_mapped("modality_text")
+            if modality_text:
+                modality_lower = str(modality_text).lower()
+                if "online" in modality_lower:
+                    location_type = LocationType.ONLINE
+                elif "híbrid" in modality_lower or "hibrid" in modality_lower:
+                    location_type = LocationType.HYBRID
+
+            # Parse is_featured (Catalunya: "Si" / "No")
+            is_featured = False
+            is_featured_text = get_mapped("is_featured_text")
+            if is_featured_text:
+                is_featured = str(is_featured_text).lower() in ("si", "sí", "yes", "true", "1")
+
             return EventCreate(
                 title=title,
                 description=description,
+                summary=summary,
                 start_date=start_date,
                 end_date=end_date,
                 start_time=start_time,
                 end_time=end_time,
-                location_type=LocationType.PHYSICAL,
+                location_type=location_type,
                 venue_name=venue_name,
                 address=address,
                 city=city,
+                district=district,
                 province=province or self.gold_config.default_province,
                 comunidad_autonoma=self.ccaa,
                 postal_code=postal_code,
@@ -650,6 +908,9 @@ class GoldAPIAdapter(BaseAdapter):
                 source_image_url=image_url,
                 is_free=is_free,
                 price_info=price_info,
+                accessibility=accessibility_info,
+                contact=contact,
+                is_featured=is_featured,
             )
 
         except Exception as e:
@@ -788,7 +1049,14 @@ class GoldAPIAdapter(BaseAdapter):
             return None
 
     def _determine_is_free(self, raw_data: dict, price_info: str | None) -> bool | None:
-        """Determine if event is free."""
+        """Determine if event is free.
+
+        Strategy:
+        1. Check explicit free/paid fields in the API data
+        2. Check for public institution organizers → assume free
+        3. Check price_info text for free/paid keywords
+        4. Default: if no paid indicators found → assume free
+        """
         mappings = self.gold_config.field_mappings or {}
 
         # Check specific free field (e.g., "free": 1 for Madrid)
@@ -802,21 +1070,134 @@ class GoldAPIAdapter(BaseAdapter):
                 if val is not None:
                     return str(val).lower() in ("si", "sí", "yes", "true", "1")
 
-        # Check price_info text
-        if price_info and self.gold_config.free_value:
-            if self.gold_config.free_value.lower() in str(price_info).lower():
+        # Check for paid indicators first (most reliable)
+        if price_info:
+            price_lower = str(price_info).lower()
+
+            # Paid indicators - contains price with € or number
+            # Patterns like "11 €", "10 / 12 €", "22€", "desde 15 euros"
+            if "€" in price_info or re.search(r"\d+\s*(€|euros?)", price_lower):
+                return False
+
+            # Paid indicators - ticket sales text
+            paid_keywords = [
+                "venta de entradas", "compra de entradas", "comprar entradas",
+                "tickets", "taquilla", "adquirir entradas", "reserva de entradas",
+            ]
+            if any(kw in price_lower for kw in paid_keywords):
+                return False
+
+            # Paid indicator - links to ticket sales (HTML with href)
+            if "<a " in price_info.lower() and any(
+                kw in price_lower for kw in ["entrada", "ticket", "compra", "reserva"]
+            ):
+                return False
+
+        # Castilla y León: eventos de biblioteca son gratuitos
+        if self.source_id == "castilla_leon_agenda":
+            evento_biblioteca = get_nested_value(raw_data, "evento_biblioteca")
+            if evento_biblioteca and str(evento_biblioteca).upper() == "SI":
                 return True
 
+        # Check for public institution organizers → assume free
+        # This applies to all sources
+        if self._is_public_institution_event(raw_data):
+            return True
+
+        # Check price_info text for free indicators
+        if price_info:
+            price_lower = str(price_info).lower()
+
+            # Free indicators - be conservative to avoid false positives
+            # Note: "entrada libre" removed - it often means "open entry" not "free"
+            # Note: "libre" alone removed - too ambiguous
+            free_keywords = ["gratuito", "gratuita", "gratis", "de balde", "doan", "free"]
+            if any(kw in price_lower for kw in free_keywords):
+                return True
+
+            # Check if free_value matches
+            if self.gold_config.free_value and self.gold_config.free_value.lower() in price_lower:
+                return True
+
+        # Default: return None (unknown) instead of assuming free
+        # The LLM enricher can determine this more accurately
         return None
+
+    def _is_public_institution_event(self, raw_data: dict) -> bool:
+        """Check if event is organized by a public institution.
+
+        Public institutions typically offer free events:
+        - Government bodies (Consejería, Junta, Gobierno, Ministerio)
+        - Local government (Ayuntamiento, Diputación, Cabildo)
+        - Public libraries, museums, cultural centers
+        - Universities
+        """
+        # Keywords indicating public institutions
+        public_keywords = [
+            # Government
+            "consejería", "consejeria", "junta de", "gobierno", "ministerio",
+            "delegación", "delegacion", "generalitat", "xunta",
+            # Local government
+            "ayuntamiento", "diputación", "diputacion", "cabildo", "concello",
+            # Cultural institutions
+            "biblioteca", "museo", "archivo", "centro cultural", "casa de cultura",
+            "filmoteca", "auditorio público", "teatro municipal",
+            # Education
+            "universidad", "facultad", "escuela oficial",
+            # Environment/Nature
+            "parque natural", "reserva natural", "espacio natural", "centro de visitantes",
+            # Other public
+            "instituto", "fundación pública", "organismo público",
+        ]
+
+        # Fields to check for public institution indicators
+        fields_to_check = [
+            # Organizer fields
+            get_nested_value(raw_data, "organizer_name"),
+            get_nested_value(raw_data, "organizers"),
+            get_nested_value(raw_data, "organizer_names"),  # From Andalucía preprocessor
+            get_nested_value(raw_data, "field_organismo_"),
+            # Venue fields
+            get_nested_value(raw_data, "venue_name"),
+            get_nested_value(raw_data, "lugar_celebracion"),
+            get_nested_value(raw_data, "address"),
+            # Description might mention organizer
+            get_nested_value(raw_data, "description"),
+        ]
+
+        for field_value in fields_to_check:
+            if not field_value:
+                continue
+
+            # Handle lists (e.g., organizer arrays)
+            if isinstance(field_value, list):
+                for item in field_value:
+                    if isinstance(item, dict):
+                        # Check nested name fields
+                        for key in ["name", "nombre", "field_nombre_largo"]:
+                            name = item.get(key, "")
+                            if name and any(kw in name.lower() for kw in public_keywords):
+                                return True
+                    elif isinstance(item, str):
+                        if any(kw in item.lower() for kw in public_keywords):
+                            return True
+            elif isinstance(field_value, str):
+                if any(kw in field_value.lower() for kw in public_keywords):
+                    return True
+
+        return False
 
     def _extract_city(self, raw_data: dict) -> str | None:
         """Extract city from various structures."""
         # Catalunya: comarca_i_municipi contains path like "agenda:ubicacions/barcelona/barcelones/barcelona"
+        # City slug uses hyphens: "sant-andreu-de-la-barca" → "Sant Andreu de la Barca"
         comarca = get_nested_value(raw_data, "comarca_i_municipi")
         if comarca:
             parts = comarca.split("/")
             if parts:
-                return parts[-1].title()
+                city_slug = parts[-1]
+                # Replace hyphens with spaces and title-case
+                return city_slug.replace("-", " ").title()
 
         # Andalucía: location field
         location = get_nested_value(raw_data, "location")
@@ -831,6 +1212,24 @@ class GoldAPIAdapter(BaseAdapter):
         prov_code = get_nested_value(raw_data, "provinceNoraCode")
         if prov_code and str(prov_code) in EUSKADI_PROVINCE_CODES:
             return EUSKADI_PROVINCE_CODES[str(prov_code)]
+
+        # Catalunya: extract province from municipi field
+        # Format: agenda:ubicacions/{provincia}/{comarca}/{municipi}
+        # Example: agenda:ubicacions/barcelona/maresme/premia-de-mar -> Barcelona
+        municipi = get_nested_value(raw_data, "municipi")
+        if municipi and "/" in str(municipi):
+            path = str(municipi).replace("agenda:ubicacions/", "")
+            parts = path.split("/")
+            if parts:
+                province_slug = parts[0].lower()
+                cat_provinces = {
+                    "barcelona": "Barcelona",
+                    "girona": "Girona",
+                    "lleida": "Lleida",
+                    "tarragona": "Tarragona",
+                }
+                if province_slug in cat_provinces:
+                    return cat_provinces[province_slug]
 
         # Andalucía: province array
         province_array = get_nested_value(raw_data, "province")
@@ -872,6 +1271,13 @@ class GoldAPIAdapter(BaseAdapter):
         """Extract image URL from various structures."""
         prefix = self.gold_config.image_url_prefix
 
+        # Direct image_url field (e.g., from Andalucía preprocessor)
+        direct_url = get_nested_value(raw_data, "image_url")
+        if direct_url:
+            if direct_url.startswith("/"):
+                return f"{prefix}{direct_url}"
+            return direct_url
+
         # Catalunya: imatges field (comma-separated paths)
         imatges = get_nested_value(raw_data, "imatges")
         if imatges:
@@ -890,12 +1296,16 @@ class GoldAPIAdapter(BaseAdapter):
             elif isinstance(first, str):
                 return f"{prefix}{first}" if not first.startswith("http") else first
 
-        # Castilla y León: imagen_evento
+        # Castilla y León: preferir imagen_evento_ampliada (mejor calidad), fallback a imagen_evento
+        img_ampliada = get_nested_value(raw_data, "imagen_evento_ampliada")
+        if img_ampliada:
+            # Decode HTML entities in URL
+            return img_ampliada.replace("&amp;", "&")
+
         img = get_nested_value(raw_data, "imagen_evento")
         if img:
             # Decode HTML entities in URL
-            img = img.replace("&amp;", "&")
-            return img
+            return img.replace("&amp;", "&")
 
         # Andalucía: image array with thumbnails
         image_array = get_nested_value(raw_data, "image")
@@ -911,6 +1321,286 @@ class GoldAPIAdapter(BaseAdapter):
                             return f"{prefix}{url}" if not url.startswith("http") else url
 
         return None
+
+    def _preprocess_andalucia(self, raw_data: dict[str, Any]) -> dict[str, Any] | None:
+        """Preprocess Andalucía contentapi data to flat structure.
+
+        The new API returns data nested in _source.data with complex field names.
+        This method flattens it for the generic parser.
+        """
+        try:
+            source = raw_data.get("_source", {})
+            if not isinstance(source, dict):
+                return None
+
+            data = source.get("data", {})
+            if not isinstance(data, dict):
+                return None
+
+            # Extract title
+            title = data.get("title", "")
+            if not title:
+                return None
+
+            # Extract dates from field_agenda_fechas array
+            start_date = None
+            end_date = None
+            fechas = data.get("field_agenda_fechas", [])
+            if isinstance(fechas, list) and fechas:
+                for f in fechas:
+                    if isinstance(f, dict):
+                        if not start_date:
+                            start_date = f.get("field_inicio_plazo_tip")
+                        end_date = f.get("field_fin_plazo_tip") or end_date
+
+            # Extract province from field_provincia array
+            province = None
+            provs = data.get("field_provincia", [])
+            if isinstance(provs, list) and provs:
+                for p in provs:
+                    if isinstance(p, dict):
+                        province = p.get("name")
+                        if province:
+                            break
+
+            # Extract image URL from field_imagen array
+            image_url = None
+            imgs = data.get("field_imagen", [])
+            if isinstance(imgs, list) and imgs:
+                for img in imgs:
+                    if isinstance(img, dict):
+                        thumbs = img.get("thumbnail", [])
+                        if isinstance(thumbs, list) and thumbs:
+                            for t in thumbs:
+                                if isinstance(t, dict):
+                                    uri = t.get("uri")
+                                    if uri:
+                                        image_url = uri
+                                        break
+                        if image_url:
+                            break
+
+            # Extract category from field_tema array
+            category = None
+            temas = data.get("field_tema", [])
+            if isinstance(temas, list) and temas:
+                for t in temas:
+                    if isinstance(t, dict):
+                        category = t.get("name")
+                        if category:
+                            break
+
+            # Build external URL from path alias
+            external_url = None
+            path = data.get("path", {})
+            if isinstance(path, dict):
+                alias = path.get("alias")
+                if alias:
+                    external_url = f"https://www.juntadeandalucia.es{alias}"
+
+            # Extract organizer info from field_organismo_ array
+            organizer_names = []
+            organismos = data.get("field_organismo_", [])
+            if isinstance(organismos, list):
+                for org in organismos:
+                    if isinstance(org, dict):
+                        org_name = org.get("field_nombre_largo") or org.get("name")
+                        if org_name:
+                            organizer_names.append(org_name)
+
+            # Get city for external_id differentiation
+            city = data.get("field_agenda_localidad")
+
+            # Build unique external_id: nid + city + date to differentiate same event in different cities
+            nid = data.get("nid", "")
+            external_id_parts = [str(nid)]
+            if city:
+                external_id_parts.append(city)
+            if start_date:
+                external_id_parts.append(start_date)
+            unique_external_id = "_".join(external_id_parts)
+
+            # Return flattened structure
+            return {
+                "title": title,
+                "description": data.get("field_descripcion", ""),
+                "start_date": start_date,
+                "end_date": end_date,
+                "time_info": data.get("field_agenda_horario"),
+                "price_info": data.get("field_agenda_precio"),
+                "venue_name": None,  # Not in this API
+                "address": data.get("field_agenda_direccion"),
+                "city": city,
+                "province": province,
+                "category_name": category,
+                "image_url": image_url,
+                "external_id": unique_external_id,
+                "external_url": external_url,
+                # Preserve organizer info for public institution detection
+                "organizer_names": organizer_names,
+            }
+
+        except Exception as e:
+            self.logger.warning(
+                "andalucia_preprocess_error",
+                error=str(e),
+            )
+            return None
+
+    def _preprocess_zaragoza(self, raw_data: dict[str, Any]) -> dict[str, Any]:
+        """Preprocess Zaragoza event data to flat structure.
+
+        Handles:
+        - subEvent[0].location nested structure
+        - UTM coordinates (EPSG:25830) to WGS84 conversion
+        - Image URL normalization (// prefix)
+        - Category extraction from nested array
+        - Time extraction from subEvent openingHours
+        """
+        # Extract location from first subEvent
+        sub_events = raw_data.get("subEvent", [])
+        location_data: dict[str, Any] = {}
+        opening_hours: list[dict] = []
+
+        if sub_events and isinstance(sub_events, list):
+            first_sub = sub_events[0]
+            if isinstance(first_sub, dict):
+                loc = first_sub.get("location", {})
+                if isinstance(loc, dict):
+                    location_data = loc
+                opening_hours = first_sub.get("openingHours", [])
+
+        # Convert UTM coordinates to WGS84
+        latitude = None
+        longitude = None
+        geometry = raw_data.get("geometry", {})
+        if geometry and isinstance(geometry, dict):
+            coords = geometry.get("coordinates", [])
+            if coords and len(coords) >= 2:
+                # Zaragoza uses EPSG:25830 (UTM zone 30N)
+                utm_x, utm_y = coords[0], coords[1]
+                latitude, longitude = self._utm_to_wgs84(utm_x, utm_y)
+
+        # Fallback to location geometry if main geometry missing
+        if latitude is None and location_data:
+            loc_geom = location_data.get("geometry", {})
+            if loc_geom and isinstance(loc_geom, dict):
+                coords = loc_geom.get("coordinates", [])
+                if coords and len(coords) >= 2:
+                    utm_x, utm_y = coords[0], coords[1]
+                    latitude, longitude = self._utm_to_wgs84(utm_x, utm_y)
+
+        # Extract category
+        category_name = raw_data.get("type")  # e.g., "Exhibición, proyección, competición"
+        if not category_name:
+            categories = raw_data.get("category", [])
+            if categories and isinstance(categories, list):
+                first_cat = categories[0]
+                if isinstance(first_cat, dict):
+                    category_name = first_cat.get("title")
+
+        # Normalize image URL (// prefix -> https://)
+        image_url = raw_data.get("image")
+        if image_url and image_url.startswith("//"):
+            image_url = f"https:{image_url}"
+
+        # Extract time from opening hours (first occurrence)
+        start_time = None
+        for oh in opening_hours:
+            if isinstance(oh, dict):
+                st = oh.get("startTime")
+                if st:
+                    start_time = st
+                    break
+
+        # Update raw_data with preprocessed values
+        raw_data["__preprocessed"] = True
+        raw_data["__latitude"] = latitude
+        raw_data["__longitude"] = longitude
+        raw_data["__category_name"] = category_name
+        raw_data["__image_url"] = image_url
+        raw_data["__start_time"] = start_time
+        raw_data["__address"] = location_data.get("streetAddress")
+        raw_data["__city"] = location_data.get("addressLocality", "Zaragoza")
+        raw_data["__postal_code"] = location_data.get("postalCode")
+        raw_data["__contact_phone"] = location_data.get("telephone")
+        raw_data["__contact_email"] = location_data.get("email")
+        raw_data["__venue_name"] = raw_data.get("location") or location_data.get("title")
+
+        return raw_data
+
+    def _utm_to_wgs84(self, easting: float, northing: float, zone: int = 30) -> tuple[float | None, float | None]:
+        """Convert UTM coordinates (EPSG:25830) to WGS84 (lat, lon).
+
+        Uses simplified conversion formula for zone 30N (Spain).
+        For production, consider using pyproj for accuracy.
+
+        Args:
+            easting: UTM X coordinate
+            northing: UTM Y coordinate
+            zone: UTM zone (default 30 for Spain)
+
+        Returns:
+            Tuple of (latitude, longitude) in WGS84 or (None, None) if invalid
+        """
+        import math
+
+        try:
+            # UTM parameters
+            k0 = 0.9996
+            a = 6378137.0  # WGS84 semi-major axis
+            e = 0.081819191  # WGS84 eccentricity
+            e1sq = 0.006739497
+
+            # Remove false easting and northing
+            x = easting - 500000.0
+            y = northing
+
+            # Calculate footprint latitude
+            m = y / k0
+            mu = m / (a * (1 - e**2 / 4 - 3 * e**4 / 64 - 5 * e**6 / 256))
+
+            e1 = (1 - math.sqrt(1 - e**2)) / (1 + math.sqrt(1 - e**2))
+            j1 = 3 * e1 / 2 - 27 * e1**3 / 32
+            j2 = 21 * e1**2 / 16 - 55 * e1**4 / 32
+            j3 = 151 * e1**3 / 96
+            j4 = 1097 * e1**4 / 512
+
+            fp = mu + j1 * math.sin(2 * mu) + j2 * math.sin(4 * mu) + j3 * math.sin(6 * mu) + j4 * math.sin(8 * mu)
+
+            # Calculate latitude and longitude
+            c1 = e1sq * math.cos(fp) ** 2
+            t1 = math.tan(fp) ** 2
+            r1 = a * (1 - e**2) / (1 - e**2 * math.sin(fp) ** 2) ** 1.5
+            n1 = a / math.sqrt(1 - e**2 * math.sin(fp) ** 2)
+            d = x / (n1 * k0)
+
+            q1 = n1 * math.tan(fp) / r1
+            q2 = d**2 / 2
+            q3 = (5 + 3 * t1 + 10 * c1 - 4 * c1**2 - 9 * e1sq) * d**4 / 24
+            q4 = (61 + 90 * t1 + 298 * c1 + 45 * t1**2 - 252 * e1sq - 3 * c1**2) * d**6 / 720
+
+            lat = fp - q1 * (q2 - q3 + q4)
+
+            q5 = d
+            q6 = (1 + 2 * t1 + c1) * d**3 / 6
+            q7 = (5 - 2 * c1 + 28 * t1 - 3 * c1**2 + 8 * e1sq + 24 * t1**2) * d**5 / 120
+
+            # Central meridian for zone 30 is -3 degrees
+            lon0 = math.radians((zone - 1) * 6 - 180 + 3)
+            lon = lon0 + (q5 - q6 + q7) / math.cos(fp)
+
+            lat_deg = math.degrees(lat)
+            lon_deg = math.degrees(lon)
+
+            # Sanity check for Spain coordinates
+            if 35 <= lat_deg <= 44 and -10 <= lon_deg <= 5:
+                return round(lat_deg, 6), round(lon_deg, 6)
+            else:
+                return None, None
+
+        except (ValueError, ZeroDivisionError, OverflowError):
+            return None, None
 
     def _extract_urls_from_description(self, description: str | None) -> dict:
         """Extract event and registration URLs from description text.
@@ -963,8 +1653,34 @@ class GoldAPIAdapter(BaseAdapter):
 
         return result
 
-    def _parse_organizer(self, name: str | None) -> EventOrganizer | None:
-        """Parse organizer from name."""
+    def _extract_url_from_html(self, html_text: str | None) -> str | None:
+        """Extract first URL from HTML anchor tag.
+
+        Parses HTML like: <a href="https://...">text</a>
+        Returns the href URL or None if not found.
+        """
+        if not html_text:
+            return None
+
+        # Match href attribute in anchor tags
+        match = re.search(r'<a\s+[^>]*href=["\']([^"\']+)["\']', str(html_text), re.IGNORECASE)
+        if match:
+            url = match.group(1)
+            # Basic validation
+            if url.startswith(("http://", "https://")):
+                return url
+        return None
+
+    def _parse_organizer(self, name: str | None, url: str | None = None) -> EventOrganizer | None:
+        """Parse organizer from name and optional URL.
+
+        Args:
+            name: Organizer name (may be cleaned up if looks like a domain)
+            url: Organizer website URL
+
+        Returns:
+            EventOrganizer with name, type, url, and logo_url (favicon from domain)
+        """
         if not name:
             return None
 
@@ -972,19 +1688,138 @@ class GoldAPIAdapter(BaseAdapter):
         if not name:
             return None
 
+        # Detect if name looks like a domain (e.g., "zumaia.eus", "www.example.com")
+        domain_pattern = r'^(?:www\.)?([a-zA-Z0-9][-a-zA-Z0-9]*\.)+[a-zA-Z]{2,}$'
+        if re.match(domain_pattern, name.strip()):
+            # Name is a domain - try to extract proper name from URL or use domain as fallback
+            # Extract the main domain part as a proper name (e.g., "zumaia.eus" -> "Zumaia")
+            domain_parts = name.replace("www.", "").split(".")
+            if domain_parts:
+                # Use first part, capitalize it (e.g., "zumaia" -> "Zumaia")
+                extracted_name = domain_parts[0].capitalize()
+                # If it's a common TLD, use the full domain minus www
+                if len(extracted_name) >= 3:
+                    name = extracted_name
+                else:
+                    # Too short, use full domain
+                    name = name.replace("www.", "")
+
+            # If url wasn't provided, construct it from the domain
+            if not url and name:
+                url = f"https://{name.lower() if '.' in name else name.lower() + '.eus'}"
+
         name_lower = name.lower()
         org_type = OrganizerType.OTRO
 
-        if any(kw in name_lower for kw in ["ayuntamiento", "diputación", "diputacion", "gobierno", "generalitat", "xunta", "junta"]):
+        # Instituciones públicas (orden importa - más específico primero)
+        institucion_keywords = [
+            "ayuntamiento", "diputación", "diputacion", "gobierno", "generalitat",
+            "xunta", "junta", "comunidad de madrid", "ministerio", "consejería",
+            "museo", "biblioteca", "centro cultural", "centro sociocultural",
+            "centro cívico", "casa de cultura", "auditorio", "teatro municipal",
+            "palacio de", "sala de exposiciones", "espacio cultural", "cultural de la villa",
+            "conde duque", "matadero", "medialab", "cineteca", "filmoteca",
+        ]
+        if any(kw in name_lower for kw in institucion_keywords):
             org_type = OrganizerType.INSTITUCION
-        elif any(kw in name_lower for kw in ["museo", "biblioteca", "centro cultural", "teatro"]):
-            org_type = OrganizerType.INSTITUCION
-        elif any(kw in name_lower for kw in ["asociación", "asociacion", "fundación", "fundacion"]):
+        elif any(kw in name_lower for kw in ["asociación", "asociacion", "fundación", "fundacion", "ong", "colectivo"]):
             org_type = OrganizerType.ASOCIACION
-        elif any(kw in name_lower for kw in ["s.l.", "s.a.", "sl", "sa"]):
+        elif any(kw in name_lower for kw in ["s.l.", "s.a.", " sl", " sa", "producciones", "entertainment", "events"]):
             org_type = OrganizerType.EMPRESA
 
-        return EventOrganizer(name=name, type=org_type)
+        # Generate logo_url from domain favicon if we have a URL
+        logo_url = None
+        if url:
+            logo_url = self._get_favicon_url(url)
+
+        return EventOrganizer(name=name, type=org_type, url=url, logo_url=logo_url)
+
+    def _get_favicon_url(self, url: str) -> str | None:
+        """Get favicon URL for a domain using Google's favicon service.
+
+        Args:
+            url: Full URL or domain
+
+        Returns:
+            URL to favicon image (via Google Favicon API)
+        """
+        if not url:
+            return None
+
+        try:
+            # Extract domain from URL
+            if url.startswith(("http://", "https://")):
+                # Parse domain from full URL
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                domain = parsed.netloc
+            else:
+                # Assume it's already a domain
+                domain = url.replace("www.", "")
+
+            if not domain:
+                return None
+
+            # Use Google's favicon service - reliable and free
+            # Returns 16x16 favicon, use size=64 for larger
+            return f"https://www.google.com/s2/favicons?domain={domain}&sz=64"
+        except Exception:
+            return None
+
+    def _extract_accessibility(self, raw_data: dict) -> EventAccessibility | None:
+        """Extract and parse accessibility information from various sources.
+
+        - Madrid: accessibility codes (1,6,7) -> structured EventAccessibility
+        - Other sources: may have different formats
+
+        Returns:
+            EventAccessibility object or None if no accessibility info
+        """
+        mappings = self.gold_config.field_mappings or {}
+
+        # Madrid: accessibility codes
+        for src, dst in mappings.items():
+            if dst == "accessibility_codes":
+                codes_str = get_nested_value(raw_data, src)
+                if codes_str:
+                    # Parse codes like "1,6" or "1"
+                    codes = [c.strip() for c in str(codes_str).split(",")]
+
+                    # Build structured accessibility data
+                    wheelchair = False
+                    sign_lang = False
+                    hearing = False
+                    braille = False
+                    other_list: list[str] = []
+
+                    for code in codes:
+                        if code in MADRID_ACCESSIBILITY_CODES:
+                            info = MADRID_ACCESSIBILITY_CODES[code]
+                            field = info["field"]
+                            desc = info["desc"]
+
+                            if field == "wheelchair_accessible":
+                                wheelchair = True
+                            elif field == "sign_language":
+                                sign_lang = True
+                            elif field == "hearing_loop":
+                                hearing = True
+                            elif field == "braille_materials":
+                                braille = True
+                            elif field == "other_facilities":
+                                other_list.append(desc)
+
+                    # Only return if we have any accessibility info
+                    if wheelchair or sign_lang or hearing or braille or other_list:
+                        return EventAccessibility(
+                            wheelchair_accessible=wheelchair,
+                            sign_language=sign_lang,
+                            hearing_loop=hearing,
+                            braille_materials=braille,
+                            other_facilities=". ".join(other_list) if other_list else None,
+                        )
+
+        return None
 
 # ============================================================
 # REGISTER ADAPTERS FOR EACH SOURCE

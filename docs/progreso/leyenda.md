@@ -1,0 +1,1 @@
+lo que esta tachado con rayas ya esta scrapeado a un nivel aceptable , todo lo demas en rojo o naranja se necesita mejorar y en gris lo que aun falta

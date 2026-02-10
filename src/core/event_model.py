@@ -9,11 +9,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class LocationType(str, Enum):
-    """Type of event location."""
+    """Type of event location.
 
-    PHYSICAL = "physical"
+    Values must match Supabase modality enum: presencial, online, hibrido
+    """
+
+    PHYSICAL = "presencial"
     ONLINE = "online"
-    HYBRID = "hybrid"
+    HYBRID = "hibrido"
 
 
 class EventSource(str, Enum):
@@ -47,6 +50,26 @@ class EventOrganizer(BaseModel):
     logo_url: str | None = None
 
 
+class EventContact(BaseModel):
+    """Contact information for an event (maps to event_contact table)."""
+
+    name: str | None = None  # Contact person name
+    email: str | None = None
+    phone: str | None = None
+    info: str | None = None  # Additional contact info (hours, etc.)
+
+
+class EventAccessibility(BaseModel):
+    """Accessibility information for an event (maps to event_accessibility table)."""
+
+    wheelchair_accessible: bool = False
+    sign_language: bool = False
+    hearing_loop: bool = False
+    braille_materials: bool = False
+    other_facilities: str | None = None
+    notes: str | None = None
+
+
 class EventCreate(BaseModel):
     """Model for creating a new event (input from scrapers)."""
 
@@ -76,6 +99,7 @@ class EventCreate(BaseModel):
     country: str = "España"
     latitude: float | None = None
     longitude: float | None = None
+    location_details: str | None = None  # Additional info: parking, access, meeting point, etc.
 
     # Online event
     online_url: str | None = None
@@ -95,6 +119,8 @@ class EventCreate(BaseModel):
     source_id: str | None = None  # ID of the scraper source
     external_url: str | None = None  # URL to original event page
     registration_url: str | None = None  # URL for tickets/registration
+    requires_registration: bool = False  # True if registration required (even without URL)
+    registration_info: str | None = None  # How to register if no URL (e.g., "Tel: 974... / email@...")
     external_id: str | None = None  # Unique ID from source for deduplication
     image_url: str | None = None  # Approved image (in our Storage)
     source_image_url: str | None = None  # Original image from source (pending approval)
@@ -109,11 +135,15 @@ class EventCreate(BaseModel):
     price: float | None = None  # Numeric price if available
     price_info: str | None = None  # Full price text (e.g., "Entrada gratuita con reserva")
 
-    # Accessibility (codes or descriptions)
-    accessibility_info: str | None = None  # Raw accessibility data
+    # Accessibility (structured data for event_accessibility table)
+    accessibility: EventAccessibility | None = None
+    accessibility_info: str | None = None  # Raw accessibility data (legacy/text)
 
-    # Publishing (is_published=False for moderation workflow)
-    is_published: bool = False  # Events start as drafts, approved via dashboard
+    # Contact (structured data for event_contact table)
+    contact: "EventContact | None" = None
+
+    # Publishing
+    is_published: bool = True  # Events published directly
     is_featured: bool = False
 
     # Recurrence (for recurring events)
@@ -144,6 +174,14 @@ class EventCreate(BaseModel):
 
         Maps EventCreate fields to Supabase 'events' table columns.
         """
+        # Determine if all_day based on time presence
+        is_all_day = self.all_day or (self.start_time is None and self.end_time is None)
+
+        # Generate map_url if we have coordinates
+        map_url = None
+        if self.latitude and self.longitude:
+            map_url = f"https://maps.google.com/?q={self.latitude},{self.longitude}"
+
         data = {
             # Required
             "title": self.title,
@@ -155,6 +193,7 @@ class EventCreate(BaseModel):
             "end_date": self.end_date.isoformat() if self.end_date else None,
             "start_time": self.start_time.isoformat() if self.start_time else None,
             "end_time": self.end_time.isoformat() if self.end_time else None,
+            "all_day": is_all_day,
 
             # Location
             "modality": self.location_type.value,  # Supabase uses 'modality' not 'location_type'
@@ -168,6 +207,7 @@ class EventCreate(BaseModel):
             "country": self.country,
             "latitude": self.latitude,
             "longitude": self.longitude,
+            "map_url": map_url,
             "online_url": self.online_url,
 
             # Source metadata
