@@ -1200,6 +1200,7 @@ class BronzeScraperAdapter(BaseAdapter):
     """
 
     adapter_type = AdapterType.STATIC  # Uses HTTP but parses HTML
+    tier = "bronze"
 
     def __init__(self, source_slug: str, *args: Any, **kwargs: Any) -> None:
         if source_slug not in BRONZE_SOURCES:

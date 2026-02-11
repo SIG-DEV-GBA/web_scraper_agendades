@@ -132,6 +132,7 @@ class SilverRSSAdapter(BaseAdapter):
     """
 
     adapter_type = AdapterType.API  # Uses HTTP fetch (no browser needed)
+    tier = "silver"
 
     def __init__(self, source_slug: str, *args: Any, **kwargs: Any) -> None:
         if source_slug not in SILVER_RSS_SOURCES:

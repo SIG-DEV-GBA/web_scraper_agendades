@@ -476,6 +476,7 @@ class GoldAPIAdapter(BaseAdapter):
     """
 
     adapter_type = AdapterType.API
+    tier = "gold"
 
     def __init__(self, source_slug: str, *args: Any, **kwargs: Any) -> None:
         """Initialize adapter with source configuration.

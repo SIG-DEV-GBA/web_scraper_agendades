@@ -256,6 +256,7 @@ class ViralAgendaAdapter(BaseAdapter):
     """
 
     adapter_type = AdapterType.DYNAMIC  # Requires JS rendering
+    tier = "bronze"
 
     # Firecrawl config
     FIRECRAWL_URL = "https://firecrawl.si-erp.cloud/scrape"
