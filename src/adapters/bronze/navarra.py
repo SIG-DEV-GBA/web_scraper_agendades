@@ -31,6 +31,7 @@ class NavarraAdapter(BaseAdapter):
     ccaa_code = "NA"
     province = "Navarra"
     adapter_type = AdapterType.STATIC  # Server-rendered PHP, no JS needed
+    tier = "bronze"
 
     # Scraping config
     BASE_URL = "https://www.culturanavarra.es"
