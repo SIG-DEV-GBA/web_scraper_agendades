@@ -68,3 +68,4 @@ logs/*.log
 # Playwright
 playwright-report/
 test-results/
+.env.production
