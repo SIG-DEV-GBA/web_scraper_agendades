@@ -1,0 +1,29 @@
+# FastAPI + Server
+fastapi>=0.128.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.11.0
+pydantic-settings>=2.0.0
+
+# Supabase
+supabase>=2.10.0
+
+# HTTP clients
+httpx>=0.28.0
+aiohttp>=3.10.0
+requests>=2.32.0
+
+# Parsing
+beautifulsoup4>=4.13.0
+feedparser>=6.0.0
+icalendar>=6.0.0
+lxml>=5.0.0
+
+# LLM
+groq>=0.15.0
+openai>=1.0.0
+
+# Logging
+structlog>=25.0.0
+
+# Utils
+python-dotenv>=1.0.0
