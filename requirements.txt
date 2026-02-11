@@ -18,6 +18,9 @@ feedparser>=6.0.0
 icalendar>=6.0.0
 lxml>=5.0.0
 
+# Browser automation
+playwright>=1.40.0
+
 # LLM
 groq>=0.15.0
 openai>=1.0.0
