@@ -484,7 +484,7 @@ class CrossSourceDeduplicator:
             quality_before=existing_score,
         )
 
-    async def record_contribution(
+    def record_contribution(
         self,
         event_id: str,
         source_id: str,
@@ -506,7 +506,7 @@ class CrossSourceDeduplicator:
             is_primary: Whether this is the primary (first) source
         """
         try:
-            await self.client._client.table("event_source_contributions").upsert(
+            self.client._client.table("event_source_contributions").upsert(
                 {
                     "event_id": event_id,
                     "source_id": source_id,

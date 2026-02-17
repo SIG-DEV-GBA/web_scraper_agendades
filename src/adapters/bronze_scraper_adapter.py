@@ -17,6 +17,8 @@ from datetime import date, datetime
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 
 from src.adapters import register_adapter
@@ -300,6 +302,9 @@ class BronzeSourceConfig:
     # Pagination
     max_pages: int = 1  # Number of listing pages to fetch
     page_param: str = "page"
+    pagination_type: str = "query"  # "query" (standard ?page=N), "liferay" (Liferay portlet), "none"
+    liferay_portlet_id: str = ""  # Liferay portlet ID for pagination (e.g., "JXvXAPSD7JC0")
+    items_per_page: int = 10  # Items per page for Liferay pagination
 
     # Detail page config
     detail_url_pattern: str = ""  # Pattern to build detail URL (e.g., "https://site.com/node/{id}")
@@ -437,12 +442,16 @@ BRONZE_SOURCES: dict[str, BronzeSourceConfig] = {
         title_selector=".card-title",
         link_selector="a",  # First <a> in card has the event URL
         image_selector="img",
-        # No pagination visible - single page with featured events
-        max_pages=1,
+        # Liferay pagination: ?..._cur=N&..._delta=9
+        max_pages=3,
+        pagination_type="liferay",
+        liferay_portlet_id="as_asac_calendar_suite_CalendarSuitePortlet_INSTANCE_JXvXAPSD7JC0",
+        items_per_page=9,
         # Detail page - full URLs from listing, uses JSON-LD for structured data
         detail_url_pattern="{id}",  # Full URL comes from listing
         detail_id_extractor="url_suffix",
-        detail_description_selector=".descripcion, .event-description, article .content",
+        # Description in div[itemprop="description"], NOT og:description (truncated)
+        detail_description_selector='[itemprop="description"], .text[itemprop="description"], div.text',
     ),
     # ---- LA RIOJA ----
     "larioja_agenda": BronzeSourceConfig(
@@ -1243,9 +1252,26 @@ class BronzeScraperAdapter(BaseAdapter):
         if not use_firecrawl:
             try:
                 headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Connection": "keep-alive",
+                    "Upgrade-Insecure-Requests": "1",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "none",
+                    "Sec-Fetch-User": "?1",
+                    "Cache-Control": "max-age=0",
                 }
-                response = requests.get(url, headers=headers, timeout=60)
+                # Use session with retry for reliability
+                session = requests.Session()
+                retry = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+                adapter = HTTPAdapter(max_retries=retry)
+                session.mount("https://", adapter)
+                session.mount("http://", adapter)
+
+                response = session.get(url, headers=headers, timeout=60)
                 if response.status_code == 200:
                     # Let requests auto-detect encoding from Content-Type header
                     return response.text
@@ -1766,10 +1792,31 @@ class BronzeScraperAdapter(BaseAdapter):
                         title = title[1:-1]
                     details["full_title"] = title
 
-                # Description from og:description
-                og_desc = soup.find("meta", {"property": "og:description"})
-                if og_desc and og_desc.get("content"):
-                    details["description"] = og_desc.get("content", "").strip()
+                # Description: prefer detail_description_selector over og:description (often truncated)
+                description = None
+                if self.bronze_config.detail_description_selector:
+                    for selector in self.bronze_config.detail_description_selector.split(","):
+                        selector = selector.strip()
+                        desc_elem = soup.select_one(selector)
+                        if desc_elem:
+                            # Get all paragraph text
+                            paragraphs = desc_elem.find_all("p")
+                            if paragraphs:
+                                description = "\n\n".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+                            else:
+                                description = desc_elem.get_text(strip=True)
+                            if description and len(description) > 50:  # Only use if substantial
+                                break
+                            description = None
+
+                # Fallback to og:description if no better description found
+                if not description:
+                    og_desc = soup.find("meta", {"property": "og:description"})
+                    if og_desc and og_desc.get("content"):
+                        description = og_desc.get("content", "").strip()
+
+                if description:
+                    details["description"] = description
 
                 # Category from URL path (eventos/logrono/conciertos/...)
                 # or from the listing category links
@@ -1792,6 +1839,68 @@ class BronzeScraperAdapter(BaseAdapter):
                     if slug in url_path:
                         details["category_name"] = cat_name
                         break
+
+            # ============================================================
+            # ASTURIAS-SPECIFIC FIELD EXTRACTION (Liferay CMS)
+            # ============================================================
+            if self.bronze_config.ccaa == "Principado de Asturias":
+                import json
+
+                # Extract JSON-LD structured data from Liferay
+                # Format: var structuredData = {...};
+                scripts = soup.find_all("script")
+                for script in scripts:
+                    if script.string and "structuredData" in script.string:
+                        match = re.search(r'structuredData\s*=\s*(\{[^;]+\})', script.string)
+                        if match:
+                            try:
+                                ld_data = json.loads(match.group(1))
+                                if ld_data.get("@type") == "Event":
+                                    # Venue/city from location
+                                    location = ld_data.get("location", {})
+                                    if isinstance(location, dict):
+                                        details["venue_name"] = location.get("name")
+                                        # Coordinates
+                                        lat = location.get("latitude")
+                                        lon = location.get("longitude")
+                                        if lat and lon:
+                                            details["latitude"] = float(lat)
+                                            details["longitude"] = float(lon)
+
+                                    # Dates
+                                    if ld_data.get("startDate"):
+                                        details["start_date_iso"] = ld_data.get("startDate")
+                                    if ld_data.get("endDate"):
+                                        details["end_date_iso"] = ld_data.get("endDate")
+
+                                    # Image from JSON-LD
+                                    if ld_data.get("image"):
+                                        details["og_image"] = ld_data.get("image")
+                            except (json.JSONDecodeError, ValueError):
+                                pass
+                        break
+
+                # Description: use itemprop="description" div (full content, not truncated)
+                desc_elem = soup.select_one('[itemprop="description"]')
+                if desc_elem:
+                    paragraphs = desc_elem.find_all("p")
+                    if paragraphs:
+                        description = "\n\n".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+                    else:
+                        description = desc_elem.get_text(strip=True)
+                    if description and len(description) > 50:
+                        details["description"] = description
+
+                # Fallback to og:description only if no itemprop found
+                if not details.get("description"):
+                    og_desc = soup.find("meta", {"property": "og:description"})
+                    if og_desc and og_desc.get("content"):
+                        details["description"] = og_desc.get("content", "").strip()
+
+                # Title from og:title
+                og_title = soup.find("meta", {"property": "og:title"})
+                if og_title and og_title.get("content"):
+                    details["full_title"] = og_title.get("content", "").strip()
 
             # ============================================================
             # VIRALAGENDA-SPECIFIC FIELD EXTRACTION
@@ -2157,10 +2266,22 @@ class BronzeScraperAdapter(BaseAdapter):
 
         # Fetch multiple pages if configured
         for page_num in range(config.max_pages):
-            # Build page URL
+            # Build page URL based on pagination type
             if page_num == 0:
                 page_url = self.source_url
+            elif config.pagination_type == "liferay" and config.liferay_portlet_id:
+                # Liferay portlet pagination: ?..._cur=N&..._delta=items_per_page
+                portlet_id = config.liferay_portlet_id
+                separator = "&" if "?" in self.source_url else "?"
+                page_url = (
+                    f"{self.source_url}{separator}"
+                    f"p_p_id={portlet_id}&p_p_lifecycle=0&"
+                    f"_{portlet_id}_calendarPath=%2Fhtml%2Fsuite%2Fdisplays%2Flist.jsp&"
+                    f"_{portlet_id}_delta={config.items_per_page}&"
+                    f"_{portlet_id}_cur={page_num + 1}"
+                )
             else:
+                # Standard query param pagination
                 separator = "&" if "?" in self.source_url else "?"
                 page_url = f"{self.source_url}{separator}{config.page_param}={page_num}"
 
@@ -2515,6 +2636,8 @@ def create_bronze_adapter_class(source_slug: str) -> type:
     DynamicBronzeAdapter.__name__ = (
         f"BronzeAdapter_{source_slug.replace('-', '_').title()}"
     )
+    # Register the adapter using decorator as function
+    register_adapter(source_slug)(DynamicBronzeAdapter)
     return DynamicBronzeAdapter
 
 

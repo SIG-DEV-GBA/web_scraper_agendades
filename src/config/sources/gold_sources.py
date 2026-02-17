@@ -18,6 +18,42 @@ from src.config.sources import (
 # ============================================================
 
 GOLD_SOURCES: list[GoldSourceConfig] = [
+    # ============================================================
+    # NAVARRA - Adaptadores personalizados con Playwright
+    # ============================================================
+    GoldSourceConfig(
+        slug="visitnavarra",
+        name="Visit Navarra - Turismo de Navarra",
+        url="https://www.visitnavarra.es/es/agenda",
+        ccaa="Navarra",
+        ccaa_code="NA",
+        tier=SourceTier.GOLD,  # Uses registered adapter
+        pagination_type=PaginationType.NONE,  # Handled by adapter
+        default_province="Navarra",
+    ),
+    GoldSourceConfig(
+        slug="larioja_agenda",
+        name="Agenda La Rioja - LARIOJA.COM",
+        url="https://agenda.larioja.com/",
+        ccaa="La Rioja",
+        ccaa_code="RI",
+        tier=SourceTier.GOLD,  # Uses registered adapter
+        pagination_type=PaginationType.NONE,  # Handled by adapter
+        default_province="La Rioja",
+    ),
+    GoldSourceConfig(
+        slug="pamplona",
+        name="Ayuntamiento de Pamplona - Agenda de Eventos",
+        url="https://www.pamplona.es/actualidad/eventos",
+        ccaa="Navarra",
+        ccaa_code="NA",
+        tier=SourceTier.GOLD,  # Uses registered adapter
+        pagination_type=PaginationType.NONE,  # Handled by adapter
+        default_province="Navarra",
+    ),
+    # ============================================================
+    # APIs Gold - Datos estructurados
+    # ============================================================
     GoldSourceConfig(
         slug="catalunya_agenda",
         name="Agenda Cultural de Catalunya",

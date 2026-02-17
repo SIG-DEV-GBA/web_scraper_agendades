@@ -44,6 +44,11 @@ class EventEnrichment(BaseModel):
     """Enriched data for a single event."""
 
     event_id: str
+    normalized_text: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Texto limpio y contextualizado para generar embedding de calidad. Describe QUÉ es el evento, TIPO de actividad, PÚBLICO objetivo."
+    )
     category_slugs: list[str] = Field(
         default_factory=list,
         description="1-3 categories from: cultural, social, economica, politica, sanitaria, tecnologia"
@@ -316,6 +321,9 @@ EJEMPLOS:
   - "Taller infantil en Casa de Cultura" → is_free=true (centro público)
   - "Concierto de Rosalía en WiZink Center" → is_free=false (artista conocida, venue comercial)
   - "15€ (reducida 10€)" → is_free=false, price=15.0, price_details="Reducida 10€"
+  - "37€ + 5€ gastos" → is_free=false, price=37.0, price_details="+ 5€ gastos de gestión"
+  - "Desde 25€" → is_free=false, price=25.0, price_details="Precio desde"
+  - "10-20€" → is_free=false, price=10.0, price_details="Hasta 20€"
   - "Venta de entradas en taquilla" → is_free=false
   - Evento en venue desconocido sin ninguna pista → is_free=null
 
@@ -388,10 +396,47 @@ REGLAS PARA PRICE_DETAILS (información de precios):
   * "Desde 10€" (redundante)
   * "Precio: 10 euros" (redundante)
 
+REGLAS PARA NORMALIZED_TEXT (MUY IMPORTANTE - para embeddings de calidad):
+El campo "normalized_text" es CRÍTICO para la clasificación semántica. Debe ser un texto LIMPIO y CONTEXTUALIZADO.
+
+OBJETIVO: Generar un párrafo que describa el evento de forma que un sistema de embeddings pueda clasificarlo correctamente.
+
+CÓMO GENERAR BUEN NORMALIZED_TEXT:
+1. Elimina ruido: fechas, precios, direcciones, URLs, nombres propios irrelevantes
+2. Describe el TIPO de actividad con palabras clave semánticas
+3. Añade CONTEXTO para desambiguar (ej: "fiesta popular" vs "concierto")
+4. Menciona el PÚBLICO objetivo si es relevante
+5. Longitud ideal: 100-200 caracteres
+
+EJEMPLOS DE NORMALIZED_TEXT:
+- Título: "Carnaval de Tudela 2026"
+  normalized_text: "Fiesta popular tradicional con comparsas, desfiles callejeros, disfraces y participación vecinal. Celebración comunitaria de carnaval."
+
+- Título: "Yoga al atardecer en el parque"
+  normalized_text: "Sesión de yoga y meditación al aire libre. Actividad de bienestar y relajación para adultos. Práctica de mindfulness."
+
+- Título: "Concierto de jazz: Bill Evans Trio"
+  normalized_text: "Concierto de música jazz en directo con trío instrumental. Espectáculo musical en auditorio. Entretenimiento cultural."
+
+- Título: "Taller de Python para principiantes"
+  normalized_text: "Curso introductorio de programación en lenguaje Python. Formación tecnológica y desarrollo de software. Alfabetización digital."
+
+- Título: "Romería de la Virgen del Pilar"
+  normalized_text: "Procesión religiosa tradicional y fiesta patronal. Celebración católica con participación comunitaria. Tradición popular."
+
+⚠️ ERRORES A EVITAR en normalized_text:
+- NO incluir fechas: "El 15 de marzo..." ❌
+- NO incluir precios: "Entrada 10€..." ❌
+- NO incluir lugares específicos: "En el Teatro Principal..." ❌
+- NO copiar el título literalmente ❌
+- SÍ describir el tipo de actividad ✓
+- SÍ añadir contexto semántico ✓
+
 Responde SOLO con JSON válido (array de objetos):
 [
   {{
     "event_id": "...",
+    "normalized_text": "Texto limpio para embedding (100-200 chars)",
     "category_slugs": ["cultural"],
     "summary": "Resumen corto (max 150 chars) o null",
     "description": "Descripción más larga si no hay original (max 500 chars) o null",

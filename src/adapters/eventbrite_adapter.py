@@ -31,13 +31,15 @@ class EventbriteSourceConfig:
 
     slug: str
     name: str
-    search_url: str  # e.g., https://www.eventbrite.es/d/spain--palma-de-mallorca/events/
+    search_url: str  # e.g., https://www.eventbrite.es/d/spain--illes-balears/events--this-month/
     ccaa: str
     ccaa_code: str
     province: str
     city: str = ""  # Default city for this source
     firecrawl_url: str = "https://firecrawl.si-erp.cloud/scrape"
     firecrawl_wait: int = 10000  # ms to wait for JS rendering
+    max_pages: int = 3  # Number of pages to fetch
+    date_filter: str = "this-month"  # Date filter: "this-month", "this-week", "today", ""
 
 
 # ============================================================
@@ -157,7 +159,7 @@ EVENTBRITE_SOURCES: dict[str, EventbriteSourceConfig] = {
         slug="eventbrite_asturias",
         name="Eventbrite - Asturias",
         search_url="https://www.eventbrite.es/d/spain--oviedo/events/",
-        ccaa="Asturias",
+        ccaa="Principado de Asturias",
         ccaa_code="AS",
         province="Asturias",
         city="Oviedo",
@@ -166,7 +168,7 @@ EVENTBRITE_SOURCES: dict[str, EventbriteSourceConfig] = {
         slug="eventbrite_gijon",
         name="Eventbrite - Gijón",
         search_url="https://www.eventbrite.es/d/spain--gij%C3%B3n/events/",
-        ccaa="Asturias",
+        ccaa="Principado de Asturias",
         ccaa_code="AS",
         province="Asturias",
         city="Gijón",
@@ -177,29 +179,12 @@ EVENTBRITE_SOURCES: dict[str, EventbriteSourceConfig] = {
     "eventbrite_baleares": EventbriteSourceConfig(
         slug="eventbrite_baleares",
         name="Eventbrite - Illes Balears",
-        search_url="https://www.eventbrite.es/d/spain--palma-de-mallorca/events/",
+        search_url="https://www.eventbrite.es/d/spain--illes-balears/events/",
         ccaa="Illes Balears",
         ccaa_code="IB",
         province="Illes Balears",
-        city="Palma",
-    ),
-    "eventbrite_ibiza": EventbriteSourceConfig(
-        slug="eventbrite_ibiza",
-        name="Eventbrite - Ibiza",
-        search_url="https://www.eventbrite.es/d/spain--ibiza/events/",
-        ccaa="Illes Balears",
-        ccaa_code="IB",
-        province="Illes Balears",
-        city="Ibiza",
-    ),
-    "eventbrite_menorca": EventbriteSourceConfig(
-        slug="eventbrite_menorca",
-        name="Eventbrite - Menorca",
-        search_url="https://www.eventbrite.es/d/spain--menorca/events/",
-        ccaa="Illes Balears",
-        ccaa_code="IB",
-        province="Illes Balears",
-        city="Mahon",
+        city="",  # City extracted from each event
+        max_pages=3,
     ),
     # ============================================================
     # CANARIAS (2 provinces)
@@ -611,71 +596,210 @@ class EventbriteAdapter:
         self.source_id = self.config.slug
         self.source_name = self.config.name
 
-    async def fetch_events(self) -> list[dict[str, Any]]:
-        """Fetch events from Eventbrite using Firecrawl.
+    def _build_search_url(self, page: int = 1) -> str:
+        """Build search URL with date filter and pagination."""
+        base_url = self.config.search_url.rstrip("/")
+
+        # Add date filter if configured (e.g., events/ -> events--this-month/)
+        date_filter = getattr(self.config, "date_filter", "this-month")
+        if date_filter and "/events/" in base_url:
+            base_url = base_url.replace("/events/", f"/events--{date_filter}/")
+        elif date_filter and base_url.endswith("/events"):
+            base_url = f"{base_url}--{date_filter}"
+
+        # Add pagination
+        if page > 1:
+            return f"{base_url}/?page={page}"
+        return f"{base_url}/"
+
+    async def fetch_events(self, limit: int | None = None) -> list[dict[str, Any]]:
+        """Fetch events from Eventbrite using Firecrawl with pagination.
+
+        Args:
+            limit: Maximum number of events to return (and fetch details for).
+                   If None, fetches all events up to max_pages.
 
         Returns list of raw event dicts from JSON-LD.
         """
+        all_events = []
+        seen_urls = set()  # Deduplicate across pages
+        max_pages = getattr(self.config, "max_pages", 1)
+
+        for page in range(1, max_pages + 1):
+            url = self._build_search_url(page)
+
+            logger.info(
+                "fetching_eventbrite_source",
+                source=self.source_id,
+                url=url,
+                page=page,
+            )
+
+            payload = {
+                "url": url,
+                "formats": ["html"],
+                "waitFor": self.config.firecrawl_wait,
+                "timeout": 60000,
+            }
+
+            try:
+                response = requests.post(
+                    self.config.firecrawl_url,
+                    json=payload,
+                    timeout=120,
+                )
+
+                if response.status_code != 200:
+                    logger.error(
+                        "firecrawl_error",
+                        source=self.source_id,
+                        status=response.status_code,
+                        page=page,
+                    )
+                    if page == 1:
+                        return []
+                    break
+
+                data = response.json()
+                html = data.get("content", data.get("data", {}).get("html", ""))
+
+                if not html:
+                    logger.warning("firecrawl_empty_response", source=self.source_id, page=page)
+                    if page == 1:
+                        return []
+                    break
+
+                logger.info(
+                    "firecrawl_response",
+                    source=self.source_id,
+                    html_length=len(html),
+                    page=page,
+                )
+
+                # Extract JSON-LD structured data
+                page_events = self._extract_jsonld_events(html)
+
+                # Deduplicate by event URL
+                new_events = 0
+                for event in page_events:
+                    event_url = event.get("url", "")
+                    if event_url and event_url not in seen_urls:
+                        seen_urls.add(event_url)
+                        all_events.append(event)
+                        new_events += 1
+
+                logger.info(
+                    "eventbrite_page_events",
+                    source=self.source_id,
+                    page=page,
+                    found=len(page_events),
+                    new=new_events,
+                )
+
+                # Stop if no new events on this page
+                if new_events == 0:
+                    break
+
+                # Stop early if we have enough events (considering the limit)
+                if limit and len(all_events) >= limit:
+                    all_events = all_events[:limit]
+                    break
+
+            except requests.exceptions.Timeout:
+                logger.error("firecrawl_timeout", source=self.source_id, page=page)
+                if page == 1:
+                    return []
+                break
+            except Exception as e:
+                logger.error("eventbrite_fetch_error", source=self.source_id, error=str(e), page=page)
+                if page == 1:
+                    return []
+                break
+
+        # Apply limit before fetching details (optimization)
+        if limit and len(all_events) > limit:
+            all_events = all_events[:limit]
+
         logger.info(
-            "fetching_eventbrite_source",
+            "eventbrite_events_found",
             source=self.source_id,
-            url=self.config.search_url,
+            count=len(all_events),
+            pages_fetched=page,
         )
 
-        payload = {
-            "url": self.config.search_url,
-            "formats": ["html"],
-            "waitFor": self.config.firecrawl_wait,
-            "timeout": 60000,
-        }
+        # Fetch detail pages for complete data (description, price, organizer)
+        if all_events:
+            all_events = self._fetch_event_details(all_events)
 
-        try:
-            response = requests.post(
-                self.config.firecrawl_url,
-                json=payload,
-                timeout=120,
-            )
+        return all_events
 
-            if response.status_code != 200:
-                logger.error(
-                    "firecrawl_error",
-                    source=self.source_id,
-                    status=response.status_code,
+    def _fetch_event_details(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Fetch detail pages to get complete event data.
+
+        The listing page JSON-LD has minimal info. Detail pages have full:
+        - Description
+        - Price (lowPrice/highPrice)
+        - Organizer
+        - Full address
+        - Event times
+        """
+        logger.info("fetching_eventbrite_details", source=self.source_id, count=len(events))
+
+        enriched_events = []
+        for i, event in enumerate(events):
+            url = event.get("url", "")
+            if not url:
+                enriched_events.append(event)
+                continue
+
+            try:
+                response = requests.post(
+                    self.config.firecrawl_url,
+                    json={
+                        "url": url,
+                        "formats": ["html"],
+                        "waitFor": 5000,
+                        "timeout": 30000,
+                    },
+                    timeout=60,
                 )
-                return []
 
-            data = response.json()
-            html = data.get("content", data.get("data", {}).get("html", ""))
+                if response.status_code == 200:
+                    data = response.json()
+                    html = data.get("content", "")
 
-            if not html:
-                logger.warning("firecrawl_empty_response", source=self.source_id)
-                return []
+                    if html:
+                        # Extract Event JSON-LD from detail page
+                        detail_events = self._extract_jsonld_events(html, event_types=["Event", "SportsEvent", "MusicEvent", "SocialEvent"])
+                        if detail_events:
+                            # Merge detail data into original event
+                            detail = detail_events[0]
+                            # Prefer detail page data (more complete)
+                            for key in ["description", "offers", "organizer", "location", "startDate", "endDate", "image"]:
+                                if key in detail and detail[key]:
+                                    event[key] = detail[key]
 
-            logger.info(
-                "firecrawl_response",
-                source=self.source_id,
-                html_length=len(html),
-            )
+                if (i + 1) % 5 == 0:
+                    logger.info("eventbrite_detail_progress", fetched=i + 1, total=len(events))
 
-            # Extract JSON-LD structured data
-            events = self._extract_jsonld_events(html)
-            logger.info(
-                "eventbrite_events_found",
-                source=self.source_id,
-                count=len(events),
-            )
+            except Exception as e:
+                logger.warning("eventbrite_detail_error", url=url[:50], error=str(e))
 
-            return events
+            enriched_events.append(event)
 
-        except requests.exceptions.Timeout:
-            logger.error("firecrawl_timeout", source=self.source_id)
-            return []
-        except Exception as e:
-            logger.error("eventbrite_fetch_error", source=self.source_id, error=str(e))
-            return []
+        logger.info("eventbrite_details_complete", source=self.source_id, enriched=len(enriched_events))
+        return enriched_events
 
-    def _extract_jsonld_events(self, html: str) -> list[dict[str, Any]]:
-        """Extract events from JSON-LD structured data in HTML."""
+    def _extract_jsonld_events(self, html: str, event_types: list[str] | None = None) -> list[dict[str, Any]]:
+        """Extract events from JSON-LD structured data in HTML.
+
+        Args:
+            html: HTML content
+            event_types: List of @type values to match (default: ["Event"])
+        """
+        if event_types is None:
+            event_types = ["Event"]
+
         events = []
 
         # Find JSON-LD script blocks
@@ -694,17 +818,17 @@ class EventbriteAdapter:
                     items = parsed.get("itemListElement", [])
                     for item in items:
                         event_data = item.get("item", {})
-                        if event_data.get("@type") == "Event":
+                        if event_data.get("@type") in event_types:
                             events.append(event_data)
 
-                # Handle single Event
-                elif isinstance(parsed, dict) and parsed.get("@type") == "Event":
+                # Handle single Event (or SportsEvent, MusicEvent, etc.)
+                elif isinstance(parsed, dict) and parsed.get("@type") in event_types:
                     events.append(parsed)
 
                 # Handle list of Events
                 elif isinstance(parsed, list):
                     for item in parsed:
-                        if isinstance(item, dict) and item.get("@type") == "Event":
+                        if isinstance(item, dict) and item.get("@type") in event_types:
                             events.append(item)
 
             except json.JSONDecodeError:
@@ -881,3 +1005,34 @@ class EventbriteAdapter:
 def get_eventbrite_sources() -> list[str]:
     """Return list of available Eventbrite source slugs."""
     return list(EVENTBRITE_SOURCES.keys())
+
+
+# ============================================================
+# ADAPTER REGISTRATION
+# ============================================================
+
+from src.adapters import register_adapter
+
+def create_eventbrite_adapter_class(source_slug: str) -> type:
+    """Create a registered adapter class for an Eventbrite source."""
+
+    class DynamicEventbriteAdapter(EventbriteAdapter):
+        tier = "eventbrite"
+
+        def __init__(self) -> None:
+            super().__init__(source_slug)
+            # Expose config properties for API visibility
+            self.ccaa = self.config.ccaa
+            self.province = self.config.province
+
+    DynamicEventbriteAdapter.__name__ = (
+        f"EventbriteAdapter_{source_slug.replace('-', '_').replace('eventbrite_', '').title()}"
+    )
+    # Register the adapter using decorator as function
+    register_adapter(source_slug)(DynamicEventbriteAdapter)
+    return DynamicEventbriteAdapter
+
+
+# Create and register adapter classes for all Eventbrite sources
+for slug in EVENTBRITE_SOURCES:
+    create_eventbrite_adapter_class(slug)

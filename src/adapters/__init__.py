@@ -54,7 +54,12 @@ def _ensure_adapters_loaded() -> None:
     from src.adapters import silver_rss_adapter  # noqa: F401
     # Bronze tier (HTML scraping)
     from src.adapters.bronze import navarra  # noqa: F401
+    from src.adapters.bronze import visitnavarra  # noqa: F401
+    from src.adapters.bronze import larioja_agenda  # noqa: F401
+    from src.adapters.bronze import pamplona  # noqa: F401
     # Bronze tier - Generic scraper (CLM, Asturias, La Rioja, Badajoz, etc.)
     from src.adapters import bronze_scraper_adapter  # noqa: F401
     # Bronze tier - Viralagenda (multiple CCAA)
     from src.adapters.bronze.viralagenda import base as viralagenda_base  # noqa: F401
+    # Eventbrite tier (all provinces)
+    from src.adapters import eventbrite_adapter  # noqa: F401

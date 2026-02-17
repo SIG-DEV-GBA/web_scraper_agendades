@@ -568,7 +568,7 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         slug="viralagenda_asturias",
         name="Viral Agenda - Asturias",
         listing_url="https://www.viralagenda.com/es/asturias",
-        ccaa="Asturias",
+        ccaa="Principado de Asturias",
         ccaa_code="AS",
         province="Asturias",
         city="",
@@ -634,24 +634,9 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         requires_detail_fetch=True,
         max_pages=1,
     ),
-    # ---- LA RIOJA (Viralagenda) ----
-    BronzeSourceConfig(
-        slug="viralagenda_la_rioja",
-        name="Viral Agenda - La Rioja",
-        listing_url="https://www.viralagenda.com/es/la-rioja",
-        ccaa="La Rioja",
-        ccaa_code="RI",
-        province="La Rioja",
-        city="",
-        tier=SourceTier.BRONZE,
-        uses_firecrawl=False,
-        event_card_selector="li.viral-event",
-        title_selector=".viral-event-title a",
-        link_selector=".viral-event-title a",
-        date_selector=".viral-event-date",
-        requires_detail_fetch=True,
-        max_pages=1,
-    ),
+    # ---- LA RIOJA ----
+    # No hay Viralagenda para La Rioja (404)
+    # Solo tiene: larioja_agenda (bronze), eventbrite_la_rioja (eventbrite)
     # ---- MURCIA (Viralagenda) ----
     BronzeSourceConfig(
         slug="viralagenda_murcia",
@@ -913,24 +898,11 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         requires_detail_fetch=True,
         max_pages=1,
     ),
-    # ---- ILLES BALEARS (Viralagenda) ----
-    BronzeSourceConfig(
-        slug="viralagenda_baleares",
-        name="Viral Agenda - Illes Balears",
-        listing_url="https://www.viralagenda.com/es/illes-balears",
-        ccaa="Illes Balears",
-        ccaa_code="IB",
-        province="Illes Balears",
-        city="",
-        tier=SourceTier.BRONZE,
-        uses_firecrawl=False,
-        event_card_selector="li.viral-event",
-        title_selector=".viral-event-title a",
-        link_selector=".viral-event-title a",
-        date_selector=".viral-event-date",
-        requires_detail_fetch=True,
-        max_pages=1,
-    ),
+    # ---- ILLES BALEARS ----
+    # No hay Viralagenda para Baleares (404)
+    # illesbalears.travel tiene muy pocos eventos
+    # Eventbrite bloquea páginas de detalle
+    # Región sin scraper por ahora
     # ---- COMUNIDAD DE MADRID (Viralagenda) ----
     BronzeSourceConfig(
         slug="viralagenda_madrid",

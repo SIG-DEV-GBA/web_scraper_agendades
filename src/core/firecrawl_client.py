@@ -166,6 +166,7 @@ class FirecrawlClient:
         only_main_content: bool = True,
         proxy: str | None = None,
         headers: dict[str, str] | None = None,
+        actions: list[dict[str, Any]] | None = None,
     ) -> FirecrawlResponse:
         """Scrape a URL and convert to Markdown.
 
@@ -178,6 +179,13 @@ class FirecrawlClient:
             only_main_content: Remove nav, footer, etc.
             proxy: Proxy URL to use
             headers: Custom headers for the request
+            actions: Browser actions to perform before scraping (Playwright)
+                     Examples:
+                     - {"type": "click", "selector": "button.load-more"}
+                     - {"type": "wait", "milliseconds": 2000}
+                     - {"type": "scroll", "direction": "down"}
+                     - {"type": "write", "selector": "input#search", "text": "query"}
+                     - {"type": "press", "key": "Enter"}
 
         Returns:
             FirecrawlResponse with markdown content
@@ -201,6 +209,9 @@ class FirecrawlClient:
 
         if headers:
             payload["headers"] = headers
+
+        if actions:
+            payload["actions"] = actions
 
         # Note: Firecrawl self-hosted doesn't support proxy in API
         # For proxy support, configure at Firecrawl server level

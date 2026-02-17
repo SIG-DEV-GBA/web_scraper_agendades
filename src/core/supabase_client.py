@@ -696,7 +696,7 @@ class SupabaseClient:
                             # Record this source's contribution
                             source_uuid = await self.resolve_source_id(event.source_id)
                             if source_uuid:
-                                await deduplicator.record_contribution(
+                                deduplicator.record_contribution(
                                     event_id=dedup_result.existing_id,
                                     source_id=source_uuid,
                                     external_id=event.external_id,
@@ -731,7 +731,7 @@ class SupabaseClient:
                         from src.utils.cross_source_dedup import calculate_quality_score
                         source_uuid = await self.resolve_source_id(event.source_id)
                         if source_uuid:
-                            await deduplicator.record_contribution(
+                            deduplicator.record_contribution(
                                 event_id=result["id"],
                                 source_id=source_uuid,
                                 external_id=event.external_id,

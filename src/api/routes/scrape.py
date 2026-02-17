@@ -1,24 +1,24 @@
-"""Scrape routes - execute scraping jobs with detailed logging."""
+"""Scrape routes - execute scraping jobs using the unified pipeline."""
 
-import asyncio
-from datetime import date, datetime
+from datetime import datetime
 from enum import Enum
 from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from src.adapters import list_adapters, get_adapter
-from src.core.event_model import EventBatch
-from src.core.llm_enricher import get_llm_enricher, SourceTier
-from src.core.image_resolver import get_image_resolver
-from src.core.supabase_client import get_supabase_client
+from src.config.sources import SourceRegistry, SourceTier
+from src.core.pipeline import run_pipeline, PipelineResult
 from src.logging import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter()
+
+# Load all sources
+import src.config.sources.gold_sources  # noqa
+import src.config.sources.bronze_sources  # noqa
+import src.config.sources.eventbrite_sources  # noqa
 
 # In-memory job storage (for production, use Redis or DB)
 _jobs: dict[str, dict[str, Any]] = {}
@@ -46,9 +46,7 @@ class ScrapeRequest(BaseModel):
     tier: str | None = Field(None, description="Tier to scrape (gold, silver, bronze)")
     province: str | None = Field(None, description="Province to scrape (e.g., 'zamora', 'madrid')")
     ccaa: str | None = Field(None, description="CCAA to scrape (e.g., 'castilla y leon', 'andalucia')")
-    limit: int = Field(10, ge=1, le=100, description="Max events per source")
-    llm_enabled: bool = Field(True, description="Enable LLM enrichment")
-    images_enabled: bool = Field(True, description="Enable Unsplash image resolution")
+    limit: int | None = Field(None, ge=1, description="Max events per source (None = unlimited)")
     dry_run: bool = Field(False, description="Don't save to database")
 
 
@@ -89,21 +87,6 @@ class JobStatusResponse(BaseModel):
     config: dict[str, Any] | None
 
 
-def get_tier_enum(source_id: str) -> SourceTier:
-    """Get SourceTier enum for a source."""
-    # Viralagenda is Bronze tier (web scraping)
-    if "viralagenda" in source_id:
-        return SourceTier.BRONCE
-    # Gold tier: official APIs with structured data
-    if "datos_abiertos" in source_id or "kulturklik" in source_id or source_id.endswith("_agenda"):
-        return SourceTier.ORO
-    # Silver tier: RSS feeds
-    elif "rss" in source_id or "radar" in source_id or "galicia" in source_id:
-        return SourceTier.PLATA
-    else:
-        return SourceTier.BRONCE
-
-
 def add_job_log(job: dict, level: LogLevel, message: str, source: str | None = None, details: dict | None = None):
     """Add a log entry to the job."""
     job["logs"].append({
@@ -118,25 +101,18 @@ def add_job_log(job: dict, level: LogLevel, message: str, source: str | None = N
 def find_sources_by_province(province: str) -> list[str]:
     """Find all sources that match a province name."""
     province_lower = province.lower().replace(" ", "_")
-    adapter_slugs = list_adapters()
     matches = []
 
-    for slug in adapter_slugs:
+    for slug, config in SourceRegistry._sources.items():
         # Direct match in slug (e.g., viralagenda_zamora)
         if province_lower in slug.lower():
             matches.append(slug)
             continue
 
-        # Check adapter's province attribute
-        adapter_class = get_adapter(slug)
-        if adapter_class:
-            try:
-                adapter = adapter_class()
-                adapter_province = getattr(adapter, 'province', None) or getattr(adapter, 'city', None)
-                if adapter_province and province_lower in adapter_province.lower().replace(" ", "_"):
-                    matches.append(slug)
-            except Exception:
-                pass
+        # Check config's province attribute
+        config_province = getattr(config, 'province', None)
+        if config_province and province_lower in config_province.lower().replace(" ", "_"):
+            matches.append(slug)
 
     return matches
 
@@ -144,230 +120,152 @@ def find_sources_by_province(province: str) -> list[str]:
 def find_sources_by_ccaa(ccaa: str) -> list[str]:
     """Find all sources that match a CCAA."""
     ccaa_lower = ccaa.lower()
-    adapter_slugs = list_adapters()
     matches = []
 
-    for slug in adapter_slugs:
-        adapter_class = get_adapter(slug)
-        if adapter_class:
-            try:
-                adapter = adapter_class()
-                adapter_ccaa = getattr(adapter, 'ccaa', None)
-                if adapter_ccaa and ccaa_lower in adapter_ccaa.lower():
-                    matches.append(slug)
-            except Exception:
-                pass
+    for slug, config in SourceRegistry._sources.items():
+        if ccaa_lower in config.ccaa.lower():
+            matches.append(slug)
 
     return matches
+
+
+def find_sources_by_tier(tier: str) -> list[str]:
+    """Find all sources of a specific tier."""
+    tier_enum = SourceTier(tier)
+    sources = SourceRegistry.get_by_tier(tier_enum)
+    return [s.slug for s in sources]
 
 
 async def run_scrape_job(
     job_id: str,
     sources: list[str],
     limit: int,
-    llm_enabled: bool,
-    images_enabled: bool,
     dry_run: bool,
 ):
-    """Background task to run scraping with detailed logging."""
+    """Background task to run scraping using the unified pipeline."""
     job = _jobs[job_id]
     job["status"] = JobStatus.RUNNING
     job["started_at"] = datetime.now().isoformat()
 
     add_job_log(job, LogLevel.INFO, f"Job iniciado para {len(sources)} fuentes", details={"sources": sources})
 
-    supabase = get_supabase_client()
-    enricher = get_llm_enricher() if llm_enabled else None
-    image_resolver = get_image_resolver() if images_enabled else None
-
-    if enricher and enricher.is_enabled:
-        add_job_log(job, LogLevel.INFO, "LLM enrichment habilitado")
-    if image_resolver and image_resolver.is_enabled:
-        add_job_log(job, LogLevel.INFO, "Unsplash image resolver habilitado")
-
-    for source_id in sources:
+    for source_slug in sources:
         try:
-            add_job_log(job, LogLevel.INFO, f"Iniciando scraping", source=source_id)
-            logger.info("scrape_job_source_start", job_id=job_id, source=source_id)
+            add_job_log(job, LogLevel.INFO, f"Iniciando scraping", source=source_slug)
+            logger.info("scrape_job_source_start", job_id=job_id, source=source_slug)
 
-            # Get adapter
-            adapter_class = get_adapter(source_id)
-            if not adapter_class:
-                add_job_log(job, LogLevel.ERROR, "Adapter no encontrado", source=source_id)
-                job["errors"].append(f"{source_id}: adapter not found")
-                job["sources_completed"] += 1
-                continue
+            # Use the unified pipeline
+            result: PipelineResult = await run_pipeline(
+                source_slug=source_slug,
+                limit=limit,
+                dry_run=dry_run,
+            )
 
-            adapter = adapter_class()
-            tier = get_tier_enum(source_id)
-            add_job_log(job, LogLevel.INFO, f"Adapter cargado (tier: {tier.value})", source=source_id)
+            # Update job stats
+            job["events_fetched"] += result.raw_count
+            job["events_parsed"] += result.parsed_count
 
-            # Fetch events (pass limit to adapter if supported)
-            try:
-                raw_events = await adapter.fetch_events(enrich=False, limit=limit)
-            except TypeError:
-                # Adapter doesn't support limit parameter
-                try:
-                    raw_events = await adapter.fetch_events(enrich=False)
-                except TypeError:
-                    raw_events = await adapter.fetch_events()
+            if result.success:
+                job["events_inserted"] += result.inserted_count
+                job["events_skipped"] += result.skipped_existing
 
-            if not raw_events:
-                add_job_log(job, LogLevel.WARNING, "No se encontraron eventos", source=source_id)
-                job["results"][source_id] = {"fetched": 0, "parsed": 0, "inserted": 0, "skipped": 0, "error": None}
-                job["sources_completed"] += 1
-                continue
-
-            total_raw = len(raw_events)
-
-            # Limit
-            if limit and len(raw_events) > limit:
-                raw_events = raw_events[:limit]
-                add_job_log(job, LogLevel.INFO, f"Limitado a {limit} eventos (de {total_raw} disponibles)", source=source_id)
-
-            job["events_fetched"] += len(raw_events)
-            add_job_log(job, LogLevel.INFO, f"Obtenidos {len(raw_events)} eventos raw", source=source_id)
-
-            # Parse events
-            events = []
-            parse_errors = 0
-            for raw in raw_events:
-                try:
-                    event = adapter.parse_event(raw)
-                    if event:
-                        events.append(event)
-                except Exception as e:
-                    parse_errors += 1
-
-            if parse_errors > 0:
-                add_job_log(job, LogLevel.WARNING, f"{parse_errors} eventos fallaron al parsear", source=source_id)
-
-            # Filter past events
-            today = date.today()
-            future_events = [e for e in events if e.start_date and e.start_date >= today]
-            past_filtered = len(events) - len(future_events)
-            events = future_events
-
-            job["events_parsed"] += len(events)
-
-            if past_filtered > 0:
-                add_job_log(job, LogLevel.INFO, f"Filtrados {past_filtered} eventos pasados", source=source_id)
-
-            if not events:
-                add_job_log(job, LogLevel.WARNING, "No hay eventos futuros", source=source_id)
-                job["results"][source_id] = {"fetched": len(raw_events), "parsed": 0, "inserted": 0, "skipped": 0, "error": "no future events"}
-                job["sources_completed"] += 1
-                continue
-
-            add_job_log(job, LogLevel.SUCCESS, f"Parseados {len(events)} eventos válidos", source=source_id)
-
-            # LLM enrichment
-            enriched_count = 0
-            if llm_enabled and enricher and enricher.is_enabled:
-                add_job_log(job, LogLevel.INFO, f"Enriqueciendo con LLM ({tier.value})...", source=source_id)
-
-                events_for_llm = [
-                    {
-                        "id": e.external_id or str(i),
-                        "title": e.title,
-                        "description": e.description or "",
-                        "venue_name": e.venue_name,
-                        "city": e.city,
-                        "province": e.province,
-                        "price_info": e.price_info,
-                    }
-                    for i, e in enumerate(events)
-                ]
-
-                enrichments = enricher.enrich_batch(events_for_llm, batch_size=5, tier=tier)
-                image_keywords_map = {}
-
-                for event in events:
-                    eid = event.external_id
-                    if eid and eid in enrichments:
-                        enr = enrichments[eid]
-                        enriched_count += 1
-                        if enr.category_slugs:
-                            event.category_slugs = enr.category_slugs
-                        if enr.summary:
-                            event.summary = enr.summary
-                        if enr.is_free is not None and event.is_free is None:
-                            event.is_free = enr.is_free
-                        if enr.image_keywords:
-                            category = enr.category_slugs[0] if enr.category_slugs else "default"
-                            image_keywords_map[eid] = (enr.image_keywords, category)
-
-                add_job_log(job, LogLevel.SUCCESS, f"Enriquecidos {enriched_count}/{len(events)} eventos", source=source_id)
-
-                # Unsplash images
-                images_resolved = 0
-                if images_enabled and image_resolver and image_resolver.is_enabled and image_keywords_map:
-                    events_needing_image = [e for e in events if e.external_id in image_keywords_map and not e.source_image_url]
-
-                    if events_needing_image:
-                        add_job_log(job, LogLevel.INFO, f"Buscando imágenes para {len(events_needing_image)} eventos...", source=source_id)
-
-                        for event in events_needing_image:
-                            eid = event.external_id
-                            keywords, category = image_keywords_map[eid]
-                            image_data = image_resolver.resolve_image_full(keywords, category)
-                            if image_data:
-                                event.source_image_url = image_data.url
-                                event.image_author = image_data.author
-                                event.image_author_url = image_data.author_url
-                                event.image_source_url = image_data.unsplash_url
-                                images_resolved += 1
-
-                        add_job_log(job, LogLevel.SUCCESS, f"Resueltas {images_resolved} imágenes de Unsplash", source=source_id)
-                    else:
-                        events_with_img = len([e for e in events if e.source_image_url])
-                        add_job_log(job, LogLevel.INFO, f"Todos los eventos ya tienen imagen ({events_with_img})", source=source_id)
-
-            # Save to DB
-            inserted = 0
-            skipped = 0
-            if not dry_run:
-                add_job_log(job, LogLevel.INFO, f"Guardando en base de datos...", source=source_id)
-
-                batch = EventBatch(
-                    source_id=source_id,
-                    source_name=adapter.source_name,
-                    ccaa=getattr(adapter, 'ccaa', None),
-                    scraped_at=datetime.now().isoformat(),
-                    events=events,
-                    total_found=len(raw_events),
+                # Log progress
+                add_job_log(
+                    job, LogLevel.INFO,
+                    f"Obtenidos {result.raw_count} eventos raw",
+                    source=source_slug
                 )
-                stats = await supabase.save_batch(batch, skip_existing=True, cross_source_dedup=True)
-                inserted = stats.get("inserted", 0)
-                skipped = stats.get("skipped", 0) + stats.get("merged", 0)
-                job["events_inserted"] += inserted
-                job["events_skipped"] += skipped
 
-                if inserted > 0:
-                    add_job_log(job, LogLevel.SUCCESS, f"Insertados {inserted} eventos", source=source_id,
-                               details={"inserted": inserted, "skipped": skipped})
+                # Warning if limit not reached
+                if result.requested_limit and not result.limit_reached:
+                    add_job_log(
+                        job, LogLevel.WARNING,
+                        f"Solicitados {result.requested_limit} eventos pero solo hay {result.limited_count} disponibles",
+                        source=source_slug,
+                        details={"requested": result.requested_limit, "available": result.limited_count}
+                    )
+
+                if result.skipped_past > 0:
+                    add_job_log(
+                        job, LogLevel.INFO,
+                        f"Filtrados {result.skipped_past} eventos pasados",
+                        source=source_slug
+                    )
+
+                add_job_log(
+                    job, LogLevel.SUCCESS,
+                    f"Parseados {result.parsed_count} eventos válidos",
+                    source=source_slug
+                )
+
+                if result.enriched_count > 0:
+                    add_job_log(
+                        job, LogLevel.SUCCESS,
+                        f"Enriquecidos {result.enriched_count} eventos con LLM",
+                        source=source_slug
+                    )
+
+                if result.images_found > 0:
+                    add_job_log(
+                        job, LogLevel.SUCCESS,
+                        f"Resueltas {result.images_found} imágenes",
+                        source=source_slug
+                    )
+
+                if dry_run:
+                    add_job_log(
+                        job, LogLevel.INFO,
+                        "Modo dry_run - no se guardaron eventos",
+                        source=source_slug
+                    )
+                elif result.inserted_count > 0:
+                    add_job_log(
+                        job, LogLevel.SUCCESS,
+                        f"Insertados {result.inserted_count} eventos",
+                        source=source_slug,
+                        details={
+                            "inserted": result.inserted_count,
+                            "skipped": result.skipped_existing,
+                            "categories": result.categories,
+                        }
+                    )
                 else:
-                    add_job_log(job, LogLevel.INFO, f"0 eventos nuevos (skipped: {skipped})", source=source_id)
-            else:
-                add_job_log(job, LogLevel.INFO, "Modo dry_run - no se guardaron eventos", source=source_id)
+                    add_job_log(
+                        job, LogLevel.INFO,
+                        f"0 eventos nuevos (skipped: {result.skipped_existing})",
+                        source=source_slug
+                    )
 
-            job["results"][source_id] = {
-                "fetched": len(raw_events),
-                "parsed": len(events),
-                "enriched": enriched_count,
-                "inserted": inserted,
-                "skipped": skipped,
-                "error": None,
-            }
+                job["results"][source_slug] = {
+                    "fetched": result.raw_count,
+                    "parsed": result.parsed_count,
+                    "enriched": result.enriched_count,
+                    "inserted": result.inserted_count,
+                    "skipped": result.skipped_existing,
+                    "categories": result.categories,
+                    "error": None,
+                }
+            else:
+                job["events_failed"] += 1
+                job["errors"].append(f"{source_slug}: {result.error}")
+                add_job_log(job, LogLevel.ERROR, f"Error: {result.error}", source=source_slug)
+                job["results"][source_slug] = {
+                    "fetched": result.raw_count,
+                    "parsed": result.parsed_count,
+                    "inserted": 0,
+                    "skipped": 0,
+                    "error": result.error,
+                }
+
             job["sources_completed"] += 1
-            add_job_log(job, LogLevel.SUCCESS, f"Completado", source=source_id)
+            add_job_log(job, LogLevel.SUCCESS, f"Completado ({result.duration_seconds:.1f}s)", source=source_slug)
 
         except Exception as e:
-            logger.error("scrape_job_source_error", job_id=job_id, source=source_id, error=str(e))
-            add_job_log(job, LogLevel.ERROR, f"Error: {str(e)}", source=source_id)
-            job["errors"].append(f"{source_id}: {str(e)}")
+            logger.error("scrape_job_source_error", job_id=job_id, source=source_slug, error=str(e))
+            add_job_log(job, LogLevel.ERROR, f"Error: {str(e)}", source=source_slug)
+            job["errors"].append(f"{source_slug}: {str(e)}")
             job["events_failed"] += 1
-            job["results"][source_id] = {"fetched": 0, "parsed": 0, "inserted": 0, "skipped": 0, "error": str(e)}
+            job["results"][source_slug] = {"fetched": 0, "parsed": 0, "inserted": 0, "skipped": 0, "error": str(e)}
             job["sources_completed"] += 1
 
     job["status"] = JobStatus.COMPLETED
@@ -412,17 +310,7 @@ async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks
         sources = find_sources_by_ccaa(request.ccaa)
         filter_used = f"ccaa:{request.ccaa}"
     elif request.tier:
-        adapter_slugs = list_adapters()
-        for slug in adapter_slugs:
-            adapter_class = get_adapter(slug)
-            if not adapter_class:
-                continue
-            try:
-                adapter = adapter_class()
-                if getattr(adapter, 'tier', '') == request.tier:
-                    sources.append(slug)
-            except Exception:
-                pass
+        sources = find_sources_by_tier(request.tier)
         filter_used = f"tier:{request.tier}"
     else:
         raise HTTPException(status_code=400, detail="Must specify 'sources', 'tier', 'province', or 'ccaa'")
@@ -451,8 +339,6 @@ async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks
             "sources": sources,
             "filter": filter_used,
             "limit": request.limit,
-            "llm_enabled": request.llm_enabled,
-            "images_enabled": request.images_enabled,
             "dry_run": request.dry_run,
         },
     }
@@ -463,8 +349,6 @@ async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks
         job_id,
         sources,
         request.limit,
-        request.llm_enabled,
-        request.images_enabled,
         request.dry_run,
     )
 
@@ -574,9 +458,8 @@ async def delete_job(job_id: str):
 async def list_provinces():
     """List all available provinces with their sources."""
     provinces = {}
-    adapter_slugs = list_adapters()
 
-    for slug in adapter_slugs:
+    for slug, config in SourceRegistry._sources.items():
         # Extract province from viralagenda slugs
         if slug.startswith("viralagenda_"):
             province = slug.replace("viralagenda_", "").replace("_", " ").title()
@@ -584,19 +467,13 @@ async def list_provinces():
                 provinces[province] = []
             provinces[province].append(slug)
         else:
-            # Try to get from adapter
-            adapter_class = get_adapter(slug)
-            if adapter_class:
-                try:
-                    adapter = adapter_class()
-                    province = getattr(adapter, 'province', None) or getattr(adapter, 'city', None)
-                    if province:
-                        province = province.title()
-                        if province not in provinces:
-                            provinces[province] = []
-                        provinces[province].append(slug)
-                except Exception:
-                    pass
+            # Try to get from config
+            province = getattr(config, 'province', None)
+            if province:
+                province = province.title()
+                if province not in provinces:
+                    provinces[province] = []
+                provinces[province].append(slug)
 
     return {
         "total": len(provinces),
@@ -611,20 +488,13 @@ async def list_provinces():
 async def list_ccaas():
     """List all available CCAAs with their sources."""
     ccaas = {}
-    adapter_slugs = list_adapters()
 
-    for slug in adapter_slugs:
-        adapter_class = get_adapter(slug)
-        if adapter_class:
-            try:
-                adapter = adapter_class()
-                ccaa = getattr(adapter, 'ccaa', None)
-                if ccaa:
-                    if ccaa not in ccaas:
-                        ccaas[ccaa] = []
-                    ccaas[ccaa].append(slug)
-            except Exception:
-                pass
+    for slug, config in SourceRegistry._sources.items():
+        ccaa = config.ccaa
+        if ccaa:
+            if ccaa not in ccaas:
+                ccaas[ccaa] = []
+            ccaas[ccaa].append(slug)
 
     return {
         "total": len(ccaas),
@@ -633,3 +503,18 @@ async def list_ccaas():
             for name, srcs in sorted(ccaas.items())
         ],
     }
+
+
+@router.get("/tiers")
+async def list_tiers():
+    """List all tiers with their source counts."""
+    tiers = {}
+
+    for tier in SourceTier:
+        sources = SourceRegistry.get_by_tier(tier)
+        tiers[tier.value] = {
+            "count": len(sources),
+            "sources": [s.slug for s in sources],
+        }
+
+    return tiers

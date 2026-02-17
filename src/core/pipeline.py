@@ -34,6 +34,7 @@ from src.config.sources import (
 )
 from src.core.event_model import EventBatch, EventCreate
 from src.core.image_provider import get_image_provider
+from src.core.category_classifier import get_category_classifier
 from src.core.llm_enricher import SourceTier as EnricherTier, get_llm_enricher
 from src.core.supabase_client import get_supabase_client
 from src.logging import get_logger
@@ -46,7 +47,7 @@ class PipelineConfig:
     """Configuration for the insertion pipeline."""
 
     source_slug: str
-    limit: int = 20
+    limit: int | None = None  # None = unlimited
     dry_run: bool = False
     upsert: bool = False
     fetch_details: bool = True
@@ -75,6 +76,10 @@ class PipelineResult:
     inserted_count: int = 0
     skipped_existing: int = 0
     failed_count: int = 0
+
+    # Limit info
+    requested_limit: int | None = None
+    limit_reached: bool = True  # False if requested more than available
 
     # Distributions
     categories: dict[str, int] = field(default_factory=dict)
@@ -158,8 +163,21 @@ class InsertionPipeline:
                 logger.warning("pipeline_no_events", source=self.config.source_slug)
                 return result
 
-            # Step 5: Apply limit
-            events = events[: self.config.limit]
+            # Step 5: Apply limit (if specified)
+            result.requested_limit = self.config.limit
+            if self.config.limit is not None:
+                if len(events) < self.config.limit:
+                    result.limit_reached = False
+                    logger.warning(
+                        "pipeline_limit_not_reached",
+                        source=self.config.source_slug,
+                        requested=self.config.limit,
+                        available=len(events),
+                        message=f"Solicitados {self.config.limit} eventos pero solo hay {len(events)} disponibles",
+                    )
+                else:
+                    result.limit_reached = True
+                events = events[: self.config.limit]
             result.limited_count = len(events)
 
             # Step 5b: Add debug prefix to titles (for testing)
@@ -253,7 +271,8 @@ class InsertionPipeline:
             )
 
         elif tier == SourceTier.EVENTBRITE:
-            return await self.adapter.fetch_events()
+            # Pass limit to avoid fetching details for events we won't use
+            return await self.adapter.fetch_events(limit=self.config.limit)
 
         elif tier == SourceTier.SILVER:
             return await self.adapter.fetch_events()
@@ -324,6 +343,8 @@ class InsertionPipeline:
                 "id": e.external_id,
                 "title": e.title,
                 "description": e.description or "",
+                "venue": e.venue_name or "",  # Important for is_free inference
+                "location": f"{e.city or ''}, {e.province or ''}, {e.comunidad_autonoma or ''}".strip(", "),
                 "@type": e.category_name or "",
                 "audience": "",
                 "price_info": e.price_info or "",
@@ -345,14 +366,39 @@ class InsertionPipeline:
         )
 
     def _apply_enrichments(self, events: list[EventCreate], enrichments: dict[str, Any]) -> None:
-        """Apply LLM enrichments to events."""
+        """Apply LLM enrichments to events with hybrid classification.
+
+        Uses embedding-based classification on the normalized_text from LLM.
+        This provides more consistent category assignment than LLM alone.
+        """
+        # Get category classifier for embedding-based classification
+        classifier = get_category_classifier()
+
         for event in events:
             enrichment = enrichments.get(event.external_id)
             if not enrichment:
                 continue
 
-            # Categories
-            if enrichment.category_slugs:
+            # Hybrid classification: Use normalized_text for embedding-based categorization
+            if enrichment.normalized_text:
+                # Classify using embeddings (more consistent than LLM categories)
+                categories, scores = classifier.classify(
+                    text=enrichment.normalized_text,
+                    title=event.title,
+                )
+                if categories:
+                    event.category_slugs = categories
+                    logger.debug(
+                        "hybrid_classification",
+                        event_id=event.external_id,
+                        categories=categories,
+                        top_score=max(scores.values()) if scores else 0,
+                    )
+                elif enrichment.category_slugs:
+                    # Fallback to LLM categories if embedding fails
+                    event.category_slugs = enrichment.category_slugs
+            elif enrichment.category_slugs:
+                # No normalized_text, use LLM categories directly
                 event.category_slugs = enrichment.category_slugs
 
             # Summary
