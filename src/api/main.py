@@ -10,14 +10,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes import sources, scrape, runs, scheduler
-from src.scheduler import init_scheduler
+# Scheduler disabled - using external cron job on VPS instead
+# from src.scheduler import init_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
-    # Startup: Initialize scheduler
-    init_scheduler()
+    # Internal scheduler disabled - using external cron job on VPS
+    # init_scheduler()
     yield
     # Shutdown: Nothing to clean up
 
@@ -59,7 +60,6 @@ async def root():
 async def health():
     """Detailed health check."""
     from src.core.supabase_client import get_supabase_client
-    from src.scheduler import get_scheduler_status, get_next_run
 
     try:
         sb = get_supabase_client()
@@ -71,13 +71,10 @@ async def health():
         db_status = f"error: {str(e)}"
         event_count = 0
 
-    # Scheduler status
-    sched = get_scheduler_status()
-
     return {
         "status": "ok",
         "database": db_status,
         "events_in_db": event_count,
-        "scheduler": sched.get("status", "unknown"),
-        "next_scrape": get_next_run(),
+        "scheduler": "external_cron",
+        "next_scrape": "Monday 00:01 (cron)",
     }
