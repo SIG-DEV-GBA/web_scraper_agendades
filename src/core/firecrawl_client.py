@@ -71,6 +71,7 @@ class FirecrawlClient:
         base_url: str = "http://localhost:3002",
         api_key: str | None = None,
         default_rate_limit: RateLimitConfig | None = None,
+        global_interval: float = 2.0,
     ):
         """Initialize Firecrawl client.
 
@@ -78,16 +79,24 @@ class FirecrawlClient:
             base_url: Firecrawl API URL (self-hosted or cloud)
             api_key: API key (required for cloud, optional for self-hosted)
             default_rate_limit: Default rate limiting config
+            global_interval: Minimum seconds between ANY Firecrawl request (anti-ban)
         """
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.default_rate_limit = default_rate_limit or RateLimitConfig()
+        self.global_interval = global_interval
 
         # Track last request time per domain
         self._last_request_time: dict[str, float] = {}
 
+        # Track GLOBAL last request time (across all domains)
+        self._last_global_request_time: float = 0.0
+
         # Track backoff level per domain (increases on 429/403)
         self._backoff_level: dict[str, int] = {}
+
+        # Global backoff level (increases on consecutive 500 errors)
+        self._global_backoff_level: int = 0
 
         # HTTP client
         self._client: httpx.AsyncClient | None = None
@@ -122,29 +131,49 @@ class FirecrawlClient:
         domain: str,
         rate_limit: RateLimitConfig,
     ) -> None:
-        """Wait appropriate time before making request."""
-        backoff_level = self._backoff_level.get(domain, 0)
-        delay = rate_limit.get_delay(backoff_level)
+        """Wait appropriate time before making request.
 
-        last_time = self._last_request_time.get(domain, 0)
-        elapsed = time.time() - last_time
-        wait_time = max(0, delay - elapsed)
+        Applies BOTH:
+        1. Per-domain rate limiting (respect individual site limits)
+        2. Global rate limiting (prevent Firecrawl overload / IP bans)
+        """
+        import random
+
+        # 1. Per-domain rate limiting
+        backoff_level = self._backoff_level.get(domain, 0)
+        domain_delay = rate_limit.get_delay(backoff_level)
+        last_domain_time = self._last_request_time.get(domain, 0)
+        domain_elapsed = time.time() - last_domain_time
+        domain_wait = max(0, domain_delay - domain_elapsed)
+
+        # 2. Global rate limiting (applies to ALL Firecrawl requests)
+        global_delay = self.global_interval * (1.5 ** self._global_backoff_level)
+        global_delay += random.uniform(0, 1.0)  # Add jitter
+        global_elapsed = time.time() - self._last_global_request_time
+        global_wait = max(0, global_delay - global_elapsed)
+
+        # Wait for the longer of the two
+        wait_time = max(domain_wait, global_wait)
 
         if wait_time > 0:
             logger.debug(
                 "rate_limit_wait",
-                domain=domain,
                 wait_seconds=round(wait_time, 2),
                 backoff_level=backoff_level,
+                global_backoff=self._global_backoff_level,
             )
             await asyncio.sleep(wait_time)
 
-        self._last_request_time[domain] = time.time()
+        now = time.time()
+        self._last_request_time[domain] = now
+        self._last_global_request_time = now
 
     def _on_success(self, domain: str) -> None:
         """Reset backoff on successful request."""
         if domain in self._backoff_level:
             self._backoff_level[domain] = max(0, self._backoff_level[domain] - 1)
+        # Decrease global backoff on success
+        self._global_backoff_level = max(0, self._global_backoff_level - 1)
 
     def _on_rate_limited(self, domain: str) -> None:
         """Increase backoff on rate limit."""
@@ -154,6 +183,15 @@ class FirecrawlClient:
             "rate_limited",
             domain=domain,
             new_backoff_level=self._backoff_level[domain],
+        )
+
+    def _on_server_error(self) -> None:
+        """Increase global backoff on server errors (500, etc)."""
+        self._global_backoff_level = min(self._global_backoff_level + 1, 4)  # Max 4 levels
+        logger.warning(
+            "global_backoff_increased",
+            new_global_backoff=self._global_backoff_level,
+            reason="server_error_500",
         )
 
     async def scrape(
@@ -239,6 +277,15 @@ class FirecrawlClient:
                 return FirecrawlResponse(
                     success=False,
                     error="Forbidden - target site may have blocked",
+                )
+
+            # Handle 500 errors with global backoff
+            if response.status_code >= 500:
+                self._on_server_error()
+                logger.warning("firecrawl_error", status=response.status_code, url=url)
+                return FirecrawlResponse(
+                    success=False,
+                    error=f"Server error {response.status_code}",
                 )
 
             response.raise_for_status()
@@ -370,11 +417,22 @@ _client: FirecrawlClient | None = None
 def get_firecrawl_client(
     base_url: str = "http://localhost:3002",
     api_key: str | None = None,
+    global_interval: float = 3.0,  # 3 seconds minimum between any Firecrawl request
 ) -> FirecrawlClient:
-    """Get singleton Firecrawl client instance."""
+    """Get singleton Firecrawl client instance.
+
+    Args:
+        base_url: Firecrawl API URL
+        api_key: API key (if needed)
+        global_interval: Minimum seconds between ANY request (anti-ban protection)
+    """
     global _client
     if _client is None:
-        _client = FirecrawlClient(base_url=base_url, api_key=api_key)
+        _client = FirecrawlClient(
+            base_url=base_url,
+            api_key=api_key,
+            global_interval=global_interval,
+        )
     return _client
 
 

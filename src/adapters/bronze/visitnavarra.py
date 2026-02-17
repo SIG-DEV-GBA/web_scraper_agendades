@@ -58,7 +58,7 @@ class VisitNavarraAdapter(BaseAdapter):
         "september": 9, "october": 10, "november": 11, "december": 12,
     }
 
-    async def fetch_events(self, enrich: bool = True, fetch_details: bool = True, max_events: int = 100, **kwargs) -> list[dict[str, Any]]:
+    async def fetch_events(self, enrich: bool = True, fetch_details: bool = True, max_events: int = 100, limit: int | None = None, **kwargs) -> list[dict[str, Any]]:
         """Fetch events from Visit Navarra with pagination using Playwright.
 
         The site uses JavaScript pagination with a "Mostrar" dropdown (8/12/24/48 items).
@@ -68,12 +68,16 @@ class VisitNavarraAdapter(BaseAdapter):
             enrich: Not used (LLM enrichment done in pipeline)
             fetch_details: If True, fetch detail pages for full data
             max_events: Maximum number of events to fetch
+            limit: If set, applies early limit BEFORE fetching details (optimization)
 
         Returns:
             List of raw event dictionaries
         """
         events = []
         seen_ids = set()
+
+        # If limit is set, use it as effective max (optimization)
+        effective_max = min(max_events, limit) if limit else max_events
 
         try:
             self.logger.info("fetching_visitnavarra_playwright", url=self.AGENDA_URL)
@@ -91,7 +95,7 @@ class VisitNavarraAdapter(BaseAdapter):
                             seen_ids.add(event_data["external_id"])
                             events.append(event_data)
 
-                            if len(events) >= max_events:
+                            if len(events) >= effective_max:
                                 break
 
             self.logger.info("visitnavarra_events_collected", count=len(events))

@@ -52,7 +52,7 @@ class PamplonaAdapter(BaseAdapter):
     VENUE_SELECTOR = ".field--name-field-event-info a"
 
     async def fetch_events(
-        self, enrich: bool = True, fetch_details: bool = True, max_events: int = 100, **kwargs
+        self, enrich: bool = True, fetch_details: bool = True, max_events: int = 100, limit: int | None = None, **kwargs
     ) -> list[dict[str, Any]]:
         """Fetch events from Pamplona Ayuntamiento with pagination.
 
@@ -60,6 +60,7 @@ class PamplonaAdapter(BaseAdapter):
             enrich: Not used (LLM enrichment done in pipeline)
             fetch_details: If True, fetch detail pages for full data
             max_events: Maximum number of events to fetch
+            limit: If set, applies early limit BEFORE fetching details (optimization)
 
         Returns:
             List of raw event dictionaries
@@ -67,9 +68,12 @@ class PamplonaAdapter(BaseAdapter):
         events = []
         seen_ids = set()
 
+        # If limit is set, use it as effective max (optimization)
+        effective_max = min(max_events, limit) if limit else max_events
+
         try:
             page = 0
-            while len(events) < max_events and page < self.MAX_PAGES:
+            while len(events) < effective_max and page < self.MAX_PAGES:
                 # Build URL with pagination
                 url = f"{self.AGENDA_URL}?page={page}" if page > 0 else self.AGENDA_URL
                 self.logger.info("fetching_pamplona", url=url, page=page)
@@ -97,7 +101,7 @@ class PamplonaAdapter(BaseAdapter):
                         events.append(event)
                         page_events += 1
 
-                        if len(events) >= max_events:
+                        if len(events) >= effective_max:
                             break
 
                 self.logger.info(

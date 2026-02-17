@@ -2250,12 +2250,13 @@ class BronzeScraperAdapter(BaseAdapter):
 
         return events
 
-    async def fetch_events(self, enrich: bool = True, fetch_details: bool = False) -> list[dict[str, Any]]:
+    async def fetch_events(self, enrich: bool = True, fetch_details: bool = False, limit: int | None = None) -> list[dict[str, Any]]:
         """Fetch and parse events from listing page(s).
 
         Args:
             enrich: If True, apply LLM enrichment (not used here, done in insert script)
             fetch_details: If True, fetch each event's detail page for description
+            limit: Max events to fetch details for (applied BEFORE detail fetching for efficiency)
 
         Returns:
             List of raw event dicts
@@ -2328,6 +2329,16 @@ class BronzeScraperAdapter(BaseAdapter):
             count=len(events),
             pages_fetched=min(page_num + 1, config.max_pages),
         )
+
+        # Apply limit BEFORE fetching details (major performance optimization)
+        if limit is not None and len(events) > limit:
+            logger.info(
+                "applying_early_limit",
+                source=self.source_id,
+                original=len(events),
+                limited=limit,
+            )
+            events = events[:limit]
 
         # Optionally fetch detail pages for descriptions
         if fetch_details and events:

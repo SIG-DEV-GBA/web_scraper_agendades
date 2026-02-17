@@ -141,25 +141,8 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         max_pages=1,
     ),
     # ============================================================
-    # LA RIOJA
+    # LA RIOJA - Usa adapter Gold (ver gold_sources.py)
     # ============================================================
-    BronzeSourceConfig(
-        slug="larioja_agenda",
-        name="Agenda de La Rioja - LARIOJA.COM",
-        listing_url="https://agenda.larioja.com/",
-        ccaa="La Rioja",
-        ccaa_code="RI",
-        province="La Rioja",
-        city="",
-        tier=SourceTier.BRONZE,
-        uses_firecrawl=False,  # Server-rendered
-        event_card_selector="article",
-        title_selector=".voc-agenda-titulo a, .voc-agenda-titulo2 a",
-        link_selector=".voc-agenda-titulo a, .voc-agenda-titulo2 a",
-        image_selector="img.figure-img",
-        requires_detail_fetch=True,
-        max_pages=1,
-    ),
     # ============================================================
     # EXTREMADURA (Badajoz)
     # ============================================================

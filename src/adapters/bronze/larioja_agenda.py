@@ -66,7 +66,7 @@ class LaRiojaAgendaAdapter(BaseAdapter):
     LISTING_URL = "https://agenda.larioja.com/eventos/la-rioja/listado.html"
     MAX_PAGES = 10  # Safety limit
 
-    async def fetch_events(self, enrich: bool = True, fetch_details: bool = True, max_events: int = 100, **kwargs) -> list[dict[str, Any]]:
+    async def fetch_events(self, enrich: bool = True, fetch_details: bool = True, max_events: int = 100, limit: int | None = None, **kwargs) -> list[dict[str, Any]]:
         """Fetch events from Agenda La Rioja with pagination.
 
         The site uses pagination via /eventos/la-rioja/listado.html?pag=X
@@ -76,6 +76,7 @@ class LaRiojaAgendaAdapter(BaseAdapter):
             enrich: Not used (LLM enrichment done in pipeline)
             fetch_details: If True, fetch detail pages for full data
             max_events: Maximum number of events to fetch (default: 100)
+            limit: If set, applies early limit BEFORE fetching details (optimization)
 
         Returns:
             List of raw event dictionaries
@@ -83,9 +84,12 @@ class LaRiojaAgendaAdapter(BaseAdapter):
         events = []
         seen_ids = set()  # Avoid duplicates across pages
 
+        # If limit is set, use it as effective max (optimization: stop pagination early)
+        effective_max = min(max_events, limit) if limit else max_events
+
         try:
             page = 1
-            while len(events) < max_events and page <= self.MAX_PAGES:
+            while len(events) < effective_max and page <= self.MAX_PAGES:
                 # Build URL with pagination
                 url = f"{self.LISTING_URL}?pag={page}"
                 self.logger.info("fetching_larioja", url=url, page=page)
@@ -113,7 +117,7 @@ class LaRiojaAgendaAdapter(BaseAdapter):
                         events.append(event)
                         page_events += 1
 
-                        if len(events) >= max_events:
+                        if len(events) >= effective_max:
                             break
 
                 self.logger.info("larioja_page_parsed", page=page, events_in_page=page_events, total=len(events))

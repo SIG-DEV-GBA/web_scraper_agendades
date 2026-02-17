@@ -256,12 +256,13 @@ class InsertionPipeline:
         tier = self.source_config.tier
 
         if tier == SourceTier.GOLD:
-            return await self.adapter.fetch_events(max_pages=3)
+            return await self.adapter.fetch_events(max_pages=3, limit=self.config.limit)
 
         elif tier == SourceTier.BRONZE:
             return await self.adapter.fetch_events(
                 enrich=False,
                 fetch_details=self.config.fetch_details,
+                limit=self.config.limit,  # Apply limit BEFORE fetching details
             )
 
         elif tier == SourceTier.SILVER:
