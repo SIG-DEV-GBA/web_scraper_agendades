@@ -4,6 +4,8 @@ Viralagenda uses a consistent HTML structure across all provinces.
 This base adapter handles the common scraping logic.
 """
 
+import asyncio
+import random
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time
@@ -393,11 +395,15 @@ class ViralAgendaAdapter(BaseAdapter):
 
             # Fetch detail pages if requested
             if fetch_details and events:
+                # Delay before starting detail fetches (anti-blocking)
+                delay = random.uniform(3, 6)
                 self.logger.info(
                     "fetching_event_details",
                     source=self.source_id,
                     count=len(events),
+                    pre_delay_seconds=round(delay, 1),
                 )
+                await asyncio.sleep(delay)
                 await self._fetch_details(events)
 
         except Exception as e:
@@ -561,6 +567,17 @@ class ViralAgendaAdapter(BaseAdapter):
             if not detail_url:
                 continue
 
+            # Anti-blocking delay between each detail request (2-5 seconds)
+            if i > 0:
+                delay = random.uniform(2, 5)
+                self.logger.debug(
+                    "detail_fetch_delay",
+                    source=self.source_id,
+                    event_index=i,
+                    delay_seconds=round(delay, 1),
+                )
+                await asyncio.sleep(delay)
+
             try:
                 # Use Firecrawl for detail page too (JS-rendered)
                 response = requests.post(
@@ -581,6 +598,16 @@ class ViralAgendaAdapter(BaseAdapter):
                     if html:
                         details = self._parse_detail_page(html, detail_url)
                         event.update(details)
+                elif response.status_code in (403, 429, 500):
+                    # Rate limited or blocked - longer backoff
+                    backoff = random.uniform(10, 20)
+                    self.logger.warning(
+                        "detail_fetch_blocked",
+                        source=self.source_id,
+                        status=response.status_code,
+                        backoff_seconds=round(backoff, 1),
+                    )
+                    await asyncio.sleep(backoff)
 
                 if (i + 1) % 5 == 0:
                     self.logger.info(
@@ -595,6 +622,8 @@ class ViralAgendaAdapter(BaseAdapter):
                     url=detail_url,
                     error=str(e),
                 )
+                # Extra delay after error (potential rate limit)
+                await asyncio.sleep(random.uniform(5, 10))
 
         self.logger.info(
             "detail_fetch_complete",
