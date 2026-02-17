@@ -109,6 +109,10 @@ AGENDADES_WEB_SCRAPPER/
 │   ├── cli/                         # CLI (Typer)
 │   │   └── main.py
 │   │
+│   ├── scheduler/                   # Jobs programados
+│   │   ├── __init__.py
+│   │   └── cron.py                  # Tareas cron
+│   │
 │   ├── core/                        # Núcleo del sistema
 │   │   ├── base_adapter.py          # Clase base adaptadores
 │   │   ├── event_model.py           # Modelos Pydantic
@@ -134,11 +138,18 @@ AGENDADES_WEB_SCRAPPER/
 │       ├── deduplication.py         # Hash de eventos
 │       └── cross_source_dedup.py    # Deduplicación cross-source
 │
-├── scripts/                         # Scripts de ejecución
-│   ├── run_pipeline.py              # Pipeline completo
-│   ├── run_batch.py                 # Batch por tier/CCAA
-│   ├── validate_quality.py          # Validación calidad
-│   └── insert_viralagenda_sources.py
+├── scripts/                         # Scripts auxiliares
+│   ├── run/                         # Ejecución de scraping
+│   │   ├── run_pipeline.py          # Pipeline completo
+│   │   ├── run_batch.py             # Batch por tier/CCAA
+│   │   ├── run_bronze.py            # Solo Bronze
+│   │   ├── run_viralagenda.py       # Solo Viralagenda
+│   │   └── insert_*.py              # Scripts de inserción
+│   ├── debug/                       # Debug y validación
+│   │   ├── test_*.py                # Tests manuales
+│   │   ├── validate_quality.py      # Validación calidad
+│   │   └── analyze_*.py             # Análisis de datos
+│   └── setup/                       # Setup inicial
 │
 ├── tests/                           # Tests
 │   ├── test_cross_source_dedup.py
