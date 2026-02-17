@@ -518,3 +518,60 @@ async def list_tiers():
         }
 
     return tiers
+
+
+class PreviewResponse(BaseModel):
+    """Response from preview endpoint."""
+    source: str
+    raw_count: int
+    valid_count: int
+    error: str | None = None
+
+
+@router.get("/preview/{source_slug}", response_model=PreviewResponse)
+async def preview_source(source_slug: str):
+    """Preview how many valid events a source has without inserting.
+
+    Fetches and parses events from the source to show the count
+    of valid events that would be scraped.
+    """
+    from src.core.pipeline import InsertionPipeline, PipelineConfig
+
+    try:
+        # Check source exists
+        config = SourceRegistry.get(source_slug)
+        if not config:
+            raise HTTPException(status_code=404, detail=f"Source '{source_slug}' not found")
+
+        # Create pipeline in dry_run mode (no insertion)
+        # Skip details, enrichment, images for fast preview
+        pipeline_config = PipelineConfig(
+            source_slug=source_slug,
+            limit=None,  # No limit - get full count
+            fetch_details=False,  # Skip detail pages for speed
+            skip_enrichment=True,  # Skip LLM to be fast
+            skip_images=True,  # Skip images to be fast
+            dry_run=True,
+        )
+        pipeline = InsertionPipeline(pipeline_config)
+
+        # Run fetch and parse only (no enrichment, no insertion)
+        result = await pipeline.run()
+
+        return PreviewResponse(
+            source=source_slug,
+            raw_count=result.raw_count,
+            valid_count=result.parsed_count,
+            error=result.error,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("preview_error", source=source_slug, error=str(e))
+        return PreviewResponse(
+            source=source_slug,
+            raw_count=0,
+            valid_count=0,
+            error=str(e),
+        )
