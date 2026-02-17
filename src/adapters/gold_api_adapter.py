@@ -497,11 +497,12 @@ class GoldAPIAdapter(BaseAdapter):
 
         super().__init__(*args, **kwargs)
 
-    async def fetch_events(self, max_pages: int = 10) -> list[dict[str, Any]]:
+    async def fetch_events(self, max_pages: int = 10, limit: int | None = None, **kwargs) -> list[dict[str, Any]]:
         """Fetch events from the API, handling pagination.
 
         Args:
             max_pages: Maximum number of pages to fetch (for paginated APIs)
+            limit: Maximum number of events to return (applied after fetching)
         """
         self.logger.info("fetching_gold_api", source=self.source_id, url=self.source_url)
 
@@ -576,6 +577,12 @@ class GoldAPIAdapter(BaseAdapter):
                     page += 1
 
             self.logger.info("fetched_events", source=self.source_id, count=len(all_items))
+
+            # Apply limit if specified
+            if limit and len(all_items) > limit:
+                self.logger.info("applying_limit", source=self.source_id, original=len(all_items), limited=limit)
+                all_items = all_items[:limit]
+
             return all_items
 
         except Exception as e:
