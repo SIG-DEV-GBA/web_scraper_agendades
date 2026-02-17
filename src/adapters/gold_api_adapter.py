@@ -228,7 +228,8 @@ GOLD_SOURCES: dict[str, GoldSourceConfig] = {
     "madrid_datos_abiertos": GoldSourceConfig(
         slug="madrid_datos_abiertos",
         name="Madrid Datos Abiertos - Eventos Culturales",
-        url="https://datos.madrid.es/egob/catalogo/206974-0-agenda-eventos-culturales-100.json",
+        # URL actualizada Feb 2026 - antiguo dataset 206974 migrado a 300107 en CKAN
+        url="https://datos.madrid.es/dataset/300107-0-agenda-actividades-eventos/resource/300107-5-agenda-actividades-eventos-json/download/300107-0-agenda-actividades-eventos.json",
         ccaa="Comunidad de Madrid",
         ccaa_code="MD",
         pagination_type=PaginationType.NONE,
