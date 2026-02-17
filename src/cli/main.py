@@ -55,7 +55,7 @@ def insert(
     tier: Optional[str] = typer.Option(
         None,
         "--tier", "-t",
-        help="Process all sources of this tier (gold, silver, bronze, eventbrite)",
+        help="Process all sources of this tier (gold, silver, bronze)",
     ),
     ccaa: Optional[str] = typer.Option(
         None,
@@ -246,7 +246,7 @@ def sources(
     tier: Optional[str] = typer.Option(
         None,
         "--tier", "-t",
-        help="Filter by tier (gold, silver, bronze, eventbrite)",
+        help="Filter by tier (gold, silver, bronze)",
     ),
     ccaa: Optional[str] = typer.Option(
         None,
@@ -286,7 +286,7 @@ def sources(
             by_tier[s.tier] = []
         by_tier[s.tier].append(s)
 
-    for tier_key in [SourceTier.GOLD, SourceTier.SILVER, SourceTier.BRONZE, SourceTier.EVENTBRITE]:
+    for tier_key in [SourceTier.GOLD, SourceTier.SILVER, SourceTier.BRONZE]:
         if tier_key not in by_tier:
             continue
 

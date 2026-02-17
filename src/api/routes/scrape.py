@@ -18,7 +18,6 @@ router = APIRouter()
 # Load all sources
 import src.config.sources.gold_sources  # noqa
 import src.config.sources.bronze_sources  # noqa
-import src.config.sources.eventbrite_sources  # noqa
 
 # In-memory job storage (for production, use Redis or DB)
 _jobs: dict[str, dict[str, Any]] = {}

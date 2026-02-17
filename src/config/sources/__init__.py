@@ -1,13 +1,13 @@
 """Centralized source configuration registry.
 
-Provides a unified registry for all event sources across tiers (Gold, Silver, Bronze, Eventbrite).
+Provides a unified registry for all event sources across tiers (Gold, Silver, Bronze).
 Sources are registered at import time and can be queried by slug, tier, or CCAA.
 
 Usage:
     from src.config.sources import SourceRegistry, SourceTier
 
     # Get a specific source
-    source = SourceRegistry.get("eventbrite_madrid")
+    source = SourceRegistry.get("catalunya_agenda")
 
     # Get all sources for a tier
     gold_sources = SourceRegistry.get_by_tier(SourceTier.GOLD)
@@ -27,7 +27,6 @@ class SourceTier(str, Enum):
     GOLD = "gold"  # Clean JSON APIs - use gpt-oss-120b (fast, structured)
     SILVER = "silver"  # Semi-structured RSS/HTML - use llama-3.3-70b (balanced)
     BRONZE = "bronze"  # Web scraping - use kimi-k2 (deep reasoning)
-    EVENTBRITE = "eventbrite"  # Eventbrite (Firecrawl + JSON-LD)
 
 
 class PaginationType(str, Enum):
@@ -118,23 +117,8 @@ class BronzeSourceConfig(BaseSourceConfig):
             object.__setattr__(self, 'tier', SourceTier.BRONZE)
 
 
-@dataclass
-class EventbriteSourceConfig(BaseSourceConfig):
-    """Configuration for Eventbrite sources."""
-
-    search_url: str = ""
-    province: str = ""
-    city: str = ""
-    firecrawl_url: str = "https://firecrawl.si-erp.cloud/scrape"
-    firecrawl_wait: int = 10000
-
-    def __post_init__(self):
-        if not hasattr(self, 'tier') or self.tier is None:
-            object.__setattr__(self, 'tier', SourceTier.EVENTBRITE)
-
-
 # Type alias for any source config
-AnySourceConfig = GoldSourceConfig | SilverSourceConfig | BronzeSourceConfig | EventbriteSourceConfig
+AnySourceConfig = GoldSourceConfig | SilverSourceConfig | BronzeSourceConfig
 
 
 class SourceRegistry:
@@ -286,7 +270,6 @@ class SourceRegistry:
         # Import all source modules to trigger registration
         # These imports have side effects - they register sources
         from src.config.sources import bronze_sources  # noqa: F401
-        from src.config.sources import eventbrite_sources  # noqa: F401
         from src.config.sources import gold_sources  # noqa: F401
 
         cls._initialized = True
@@ -306,7 +289,6 @@ __all__ = [
     "GoldSourceConfig",
     "SilverSourceConfig",
     "BronzeSourceConfig",
-    "EventbriteSourceConfig",
     "AnySourceConfig",
     "SourceRegistry",
 ]

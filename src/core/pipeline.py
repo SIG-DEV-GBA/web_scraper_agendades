@@ -26,7 +26,6 @@ from typing import Any
 from src.config.sources import (
     AnySourceConfig,
     BronzeSourceConfig,
-    EventbriteSourceConfig,
     GoldSourceConfig,
     SilverSourceConfig,
     SourceRegistry,
@@ -244,11 +243,6 @@ class InsertionPipeline:
 
             return BronzeScraperAdapter(self.config.source_slug)
 
-        elif isinstance(self.source_config, EventbriteSourceConfig):
-            from src.adapters.eventbrite_adapter import EventbriteAdapter
-
-            return EventbriteAdapter(self.config.source_slug)
-
         elif isinstance(self.source_config, SilverSourceConfig):
             from src.adapters.silver_rss_adapter import SilverRSSAdapter
 
@@ -269,10 +263,6 @@ class InsertionPipeline:
                 enrich=False,
                 fetch_details=self.config.fetch_details,
             )
-
-        elif tier == SourceTier.EVENTBRITE:
-            # Pass limit to avoid fetching details for events we won't use
-            return await self.adapter.fetch_events(limit=self.config.limit)
 
         elif tier == SourceTier.SILVER:
             return await self.adapter.fetch_events()
@@ -355,7 +345,6 @@ class InsertionPipeline:
             SourceTier.GOLD: EnricherTier.ORO,
             SourceTier.SILVER: EnricherTier.PLATA,
             SourceTier.BRONZE: EnricherTier.BRONCE,
-            SourceTier.EVENTBRITE: EnricherTier.BRONCE,  # Eventbrite uses Bronze tier
         }
         enricher_tier = tier_map.get(self.source_config.tier, EnricherTier.ORO)
 
@@ -539,7 +528,7 @@ async def run_tier_pipeline(
     """Run pipeline for all sources in a tier.
 
     Args:
-        tier: Source tier (GOLD, SILVER, BRONZE, EVENTBRITE)
+        tier: Source tier (GOLD, SILVER, BRONZE)
         limit: Max events per source
         dry_run: If True, don't insert to database
         upsert: If True, update existing events

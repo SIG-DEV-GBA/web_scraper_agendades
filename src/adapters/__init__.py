@@ -61,5 +61,3 @@ def _ensure_adapters_loaded() -> None:
     from src.adapters import bronze_scraper_adapter  # noqa: F401
     # Bronze tier - Viralagenda (multiple CCAA)
     from src.adapters.bronze.viralagenda import base as viralagenda_base  # noqa: F401
-    # Eventbrite tier (all provinces)
-    from src.adapters import eventbrite_adapter  # noqa: F401
