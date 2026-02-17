@@ -778,16 +778,23 @@ class GoldAPIAdapter(BaseAdapter):
 
             is_free = self._determine_is_free(raw_data, price_info_raw)
 
+            # Extract numeric price from price text
+            price = self._extract_numeric_price(price_info_clean)
+
             # Generate user-friendly price_info text (using cleaned version)
             if is_free is True:
                 # Free event - use clean text if descriptive, else default
                 price_info = price_info_clean if price_info_clean else "Entrada gratuita"
+                price = None  # Ensure no price for free events
             elif is_free is False:
                 # Paid event - use clean text if available
                 price_info = price_info_clean if price_info_clean else "Consultar precio en web del organizador"
             else:
                 # Unknown - provide default message
                 price_info = price_info_clean if price_info_clean else "Consultar en web del organizador"
+                # If we extracted a price, mark as not free
+                if price is not None:
+                    is_free = False
 
             # Category
             category_name = get_mapped("category_name") or self._extract_category(raw_data)
@@ -916,6 +923,7 @@ class GoldAPIAdapter(BaseAdapter):
                 external_id=external_id,
                 source_image_url=image_url,
                 is_free=is_free,
+                price=price,
                 price_info=price_info,
                 accessibility=accessibility_info,
                 contact=contact,
@@ -1131,6 +1139,47 @@ class GoldAPIAdapter(BaseAdapter):
         # Default: return None (unknown) instead of assuming free
         # The LLM enricher can determine this more accurately
         return None
+
+    def _extract_numeric_price(self, price_text: str | None) -> float | None:
+        """Extract numeric price value from price text.
+
+        Handles formats like:
+        - "10€", "10 €", "10,50€"
+        - "10 euros", "10.50 euros"
+        - "Desde 10€", "A partir de 5€"
+        - "General: 15€ / Reducida: 10€" (returns lowest)
+
+        Returns:
+            float price value or None if no price found
+        """
+        if not price_text:
+            return None
+
+        # Skip if clearly free
+        price_lower = price_text.lower()
+        if any(kw in price_lower for kw in ["gratis", "gratuito", "gratuita", "entrada libre", "libre acceso"]):
+            return None
+
+        # Find all price patterns: digits with optional decimals followed by € or euros
+        # Pattern: 10, 10€, 10 €, 10,50€, 10.50 euros
+        price_pattern = r"(\d+(?:[.,]\d{1,2})?)\s*(?:€|euros?)"
+        matches = re.findall(price_pattern, price_text, re.IGNORECASE)
+
+        if not matches:
+            return None
+
+        # Convert all found prices to float and return the minimum (base price)
+        prices = []
+        for match in matches:
+            try:
+                # Replace comma with dot for decimal
+                price_val = float(match.replace(",", "."))
+                if price_val > 0:  # Ignore 0€ (free)
+                    prices.append(price_val)
+            except ValueError:
+                continue
+
+        return min(prices) if prices else None
 
     def _is_public_institution_event(self, raw_data: dict) -> bool:
         """Check if event is organized by a public institution.
