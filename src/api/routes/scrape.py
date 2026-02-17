@@ -45,7 +45,7 @@ class ScrapeRequest(BaseModel):
     tier: str | None = Field(None, description="Tier to scrape (gold, silver, bronze)")
     province: str | None = Field(None, description="Province to scrape (e.g., 'zamora', 'madrid')")
     ccaa: str | None = Field(None, description="CCAA to scrape (e.g., 'castilla y leon', 'andalucia')")
-    limit: int | None = Field(None, ge=1, description="Max events per source (None = unlimited)")
+    limit: int = Field(10, ge=1, description="Max events per source (default: 10)")
     dry_run: bool = Field(False, description="Don't save to database")
 
 
