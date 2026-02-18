@@ -265,7 +265,7 @@ def list_jobs(limit: int = 50) -> list[dict[str, Any]]:
                 "job_id": row["id"],
                 "status": row["status"],
                 "filter": config.get("filter", "unknown"),
-                "sources_total": config.get("sources", []),
+                "sources_total": len(config.get("sources", [])),
                 "sources_completed": progress.get("sources_completed", 0),
                 "events_inserted": progress.get("events_inserted", 0),
                 "events_skipped": progress.get("events_skipped", 0),
