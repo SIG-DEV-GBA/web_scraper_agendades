@@ -239,8 +239,13 @@ class InsertionPipeline:
             return adapter_class()
 
         elif isinstance(self.source_config, BronzeSourceConfig):
-            from src.adapters.bronze_scraper_adapter import BronzeScraperAdapter
+            # Use specialized adapter for Viralagenda (handles infinite scroll + anti-blocking)
+            if self.config.source_slug.startswith("viralagenda_"):
+                from src.adapters.bronze.viralagenda.base import ViralAgendaAdapter
+                return ViralAgendaAdapter(self.config.source_slug)
 
+            # Generic bronze adapter for other sources
+            from src.adapters.bronze_scraper_adapter import BronzeScraperAdapter
             return BronzeScraperAdapter(self.config.source_slug)
 
         elif isinstance(self.source_config, SilverSourceConfig):
