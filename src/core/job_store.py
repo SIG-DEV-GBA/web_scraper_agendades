@@ -321,6 +321,62 @@ def delete_job(job_id: str) -> bool:
         return False
 
 
+def mark_interrupted_jobs() -> int:
+    """Mark all running/pending jobs as interrupted on startup.
+
+    Called when the API starts to clean up jobs that were running
+    when the container crashed/restarted.
+
+    Returns:
+        Number of jobs marked as interrupted
+    """
+    try:
+        sb = _get_sb()
+
+        # Find running or pending jobs
+        result = sb.table("scraper_jobs").select("id, status, logs").in_(
+            "status", ["running", "pending"]
+        ).execute()
+
+        if not result.data:
+            return 0
+
+        count = 0
+        for row in result.data:
+            job_id = row["id"]
+            logs = row.get("logs", [])
+
+            # Add interruption log
+            logs.append({
+                "timestamp": datetime.now().isoformat(),
+                "level": "warning",
+                "message": "Job interrumpido por reinicio del servidor",
+                "source": None,
+                "details": {"previous_status": row["status"]},
+            })
+
+            # Update to failed status
+            sb.table("scraper_jobs").update({
+                "status": "failed",
+                "logs": logs,
+                "errors": ["Container restart - job interrupted"],
+                "updated_at": datetime.now().isoformat(),
+            }).eq("id", job_id).execute()
+
+            # Clear from cache if present
+            if job_id in _job_cache:
+                del _job_cache[job_id]
+
+            count += 1
+            logger.info("job_marked_interrupted", job_id=job_id)
+
+        return count
+
+    except Exception as e:
+        logger.error("mark_interrupted_failed", error=str(e))
+        return 0
+
+
 def _db_to_job(row: dict) -> dict[str, Any]:
     """Convert database row to job dict.
 

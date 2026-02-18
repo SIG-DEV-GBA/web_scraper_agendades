@@ -10,13 +10,23 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes import sources, scrape, runs, scheduler
+from src.core.job_store import mark_interrupted_jobs
+from src.logging import get_logger
+
 # Scheduler disabled - using external cron job on VPS instead
 # from src.scheduler import init_scheduler
+
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
+    # Mark any jobs that were running when we crashed as interrupted
+    interrupted = mark_interrupted_jobs()
+    if interrupted:
+        logger.info("startup_cleanup", jobs_marked_interrupted=interrupted)
+
     # Internal scheduler disabled - using external cron job on VPS
     # init_scheduler()
     yield
