@@ -13,6 +13,7 @@ from typing import Any
 
 import requests
 from bs4 import BeautifulSoup
+from playwright.async_api import async_playwright
 
 from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
@@ -295,6 +296,80 @@ class ViralAgendaAdapter(BaseAdapter):
 
         super().__init__(*args, **kwargs)
 
+    async def _fetch_with_playwright(self, limit: int | None = None) -> str:
+        """Fetch listing page using Playwright with infinite scroll support.
+
+        Args:
+            limit: Target number of events (scrolls until reached or no more load)
+
+        Returns:
+            HTML content of the page after scrolling
+        """
+        # Calculate how many scrolls we need (each loads ~20 events)
+        max_scrolls = 10  # Default max
+        if limit:
+            max_scrolls = min((limit // 20) + 2, 15)  # +2 buffer, max 15 scrolls
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            try:
+                page = await browser.new_page()
+                await page.set_viewport_size({"width": 1920, "height": 1080})
+
+                self.logger.info(
+                    "playwright_loading",
+                    source=self.source_id,
+                    url=self.source_url,
+                )
+
+                await page.goto(self.source_url, wait_until="networkidle")
+
+                # Scroll loop - scroll to last card to trigger infinite scroll
+                prev_count = 0
+                for i in range(max_scrolls):
+                    cards = await page.query_selector_all(self.EVENT_CARD_SELECTOR)
+                    count = len(cards)
+
+                    self.logger.debug(
+                        "playwright_scroll",
+                        source=self.source_id,
+                        scroll=i,
+                        cards=count,
+                    )
+
+                    # Stop if no more cards loading
+                    if count == prev_count:
+                        self.logger.info(
+                            "playwright_scroll_complete",
+                            source=self.source_id,
+                            total_cards=count,
+                            scrolls=i,
+                        )
+                        break
+
+                    # Stop if we have enough cards
+                    if limit and count >= limit:
+                        self.logger.info(
+                            "playwright_limit_reached",
+                            source=self.source_id,
+                            cards=count,
+                            limit=limit,
+                        )
+                        break
+
+                    prev_count = count
+
+                    # Scroll to last card to trigger lazy loading
+                    if cards:
+                        await cards[-1].scroll_into_view_if_needed()
+                        await asyncio.sleep(2)  # Wait for content to load
+
+                html = await page.content()
+                return html
+
+            finally:
+                await browser.close()
+
     async def fetch_events(
         self,
         enrich: bool = False,
@@ -314,58 +389,17 @@ class ViralAgendaAdapter(BaseAdapter):
         events = []
 
         try:
-            # Fetch listing page via Firecrawl
+            # Fetch listing page via Playwright (handles infinite scroll)
             self.logger.info(
-                "fetching_viralagenda",
+                "fetching_viralagenda_playwright",
                 source=self.source_id,
                 url=self.source_url,
             )
 
-            response = requests.post(
-                self.FIRECRAWL_URL,
-                json={
-                    "url": self.source_url,
-                    "formats": ["html"],
-                    "timeout": 60000,
-                    "waitFor": 3000,
-                },
-                timeout=90,
-            )
-
-            if response.status_code != 200:
-                error_text = response.text[:200]
-                # Check if it's a proxy IP block (Firecrawl returns 500 with error message)
-                is_ip_blocked = (
-                    response.status_code == 500
-                    and "error" in error_text.lower()
-                )
-
-                if is_ip_blocked:
-                    self.logger.warning(
-                        "firecrawl_proxy_blocked",
-                        source=self.source_id,
-                        status=response.status_code,
-                        message="La IP actual del proxy está siendo bloqueada. Reintente más tarde.",
-                    )
-                    raise Exception(
-                        f"Proxy IP bloqueada por {self.source_url}. "
-                        "Viralagenda bloquea algunas IPs del pool de proxies residenciales. "
-                        "Reintente en unos minutos para obtener una IP diferente."
-                    )
-                else:
-                    self.logger.error(
-                        "firecrawl_error",
-                        status=response.status_code,
-                        error=error_text,
-                    )
-                return []
-
-            data = response.json()
-            # Firecrawl returns 'content' not 'html'
-            html = data.get("content") or data.get("html", "")
+            html = await self._fetch_with_playwright(limit=limit)
 
             if not html:
-                self.logger.warning("firecrawl_empty_response", source=self.source_id)
+                self.logger.warning("playwright_empty_response", source=self.source_id)
                 return []
 
             # Parse listing
