@@ -19,6 +19,7 @@ Usage:
     result = await pipeline.run()
 """
 
+import gc
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
@@ -39,6 +40,40 @@ from src.core.supabase_client import get_supabase_client
 from src.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Memory cleanup interval (every N batches)
+CLEANUP_EVERY_N_BATCHES = 5
+
+
+def _cleanup_memory() -> None:
+    """Clear caches and force garbage collection to free memory.
+
+    Call this periodically during long-running scrapes to prevent OOM.
+    """
+    try:
+        # Clear image provider cache
+        from src.core.image_provider import get_image_provider
+        provider = get_image_provider()
+        if hasattr(provider, '_cache'):
+            cache_size = len(provider._cache)
+            provider._cache.clear()
+            if cache_size > 0:
+                logger.debug("cleared_image_cache", items=cache_size)
+
+        # Clear geocoder cache
+        from src.core.geocoder import get_geocoder
+        geocoder = get_geocoder()
+        if hasattr(geocoder, '_cache'):
+            geocoder._cache.clear()
+        if hasattr(geocoder, '_ccaa_cache'):
+            geocoder._ccaa_cache.clear()
+
+        # Force garbage collection
+        collected = gc.collect()
+        logger.debug("memory_cleanup", gc_collected=collected)
+
+    except Exception as e:
+        logger.warning("memory_cleanup_failed", error=str(e))
 
 
 @dataclass
@@ -253,6 +288,10 @@ class InsertionPipeline:
                         inserted=stats["inserted"],
                         skipped=stats["skipped"],
                     )
+
+                    # Periodic memory cleanup to prevent OOM
+                    if batch_num % CLEANUP_EVERY_N_BATCHES == 0:
+                        _cleanup_memory()
 
                 result.inserted_count = total_inserted
                 result.skipped_existing = total_skipped
