@@ -56,6 +56,7 @@ class PipelineConfig:
     debug_prefix: bool = False  # Add source prefix to titles for testing
     streaming_insert: bool = True  # Insert events in batches instead of all at end
     streaming_batch_size: int = 5  # How many events to process before inserting
+    filter_existing: bool = True  # Filter out existing events BEFORE applying limit
 
 
 @dataclass
@@ -71,11 +72,12 @@ class PipelineResult:
     raw_count: int = 0
     parsed_count: int = 0
     skipped_past: int = 0
+    filtered_existing: int = 0  # Events filtered BEFORE limit (already in DB)
     limited_count: int = 0
     enriched_count: int = 0
     images_found: int = 0
     inserted_count: int = 0
-    skipped_existing: int = 0
+    skipped_existing: int = 0  # Events skipped during insert (duplicate check)
     failed_count: int = 0
 
     # Limit info
@@ -167,6 +169,20 @@ class InsertionPipeline:
             if not events:
                 logger.warning("pipeline_no_events", source=self.config.source_slug)
                 return result
+
+            # Step 4b: Filter existing events BEFORE applying limit
+            if self.config.filter_existing and not self.config.dry_run:
+                events, filtered = await self._filter_existing_events(events)
+                result.filtered_existing = filtered
+
+                if not events:
+                    logger.info(
+                        "pipeline_all_events_exist",
+                        source=self.config.source_slug,
+                        filtered=filtered,
+                    )
+                    result.success = True
+                    return result
 
             # Step 5: Apply limit (if specified)
             result.requested_limit = self.config.limit
@@ -329,6 +345,13 @@ class InsertionPipeline:
 
                 if not events:
                     continue
+
+                # Filter existing events BEFORE enrichment (saves LLM calls)
+                if self.config.filter_existing and not self.config.dry_run:
+                    events, filtered = await self._filter_existing_events(events)
+                    result.filtered_existing += filtered
+                    if not events:
+                        continue
 
                 # Enrich batch
                 batch_enrichments = {}
@@ -500,6 +523,60 @@ class InsertionPipeline:
         except (ValueError, TypeError):
             # If date parsing fails, include the event
             return True
+
+    async def _filter_existing_events(self, events: list[EventCreate]) -> tuple[list[EventCreate], int]:
+        """Filter out events that already exist in the database.
+
+        This is done BEFORE applying the limit, so limit=100 means 100 NEW events.
+
+        Args:
+            events: List of parsed events
+
+        Returns:
+            Tuple of (new events, count of filtered existing events)
+        """
+        if not events:
+            return events, 0
+
+        # Get all external_ids
+        external_ids = [e.external_id for e in events if e.external_id]
+
+        if not external_ids:
+            return events, 0
+
+        # Query DB for existing external_ids
+        sb = get_supabase_client()
+        try:
+            # Query in batches of 100 to avoid URL length limits
+            existing_ids = set()
+            for i in range(0, len(external_ids), 100):
+                batch_ids = external_ids[i:i + 100]
+                result = sb.client.table("events").select("external_id").in_("external_id", batch_ids).execute()
+                existing_ids.update(row["external_id"] for row in result.data)
+
+            # Filter out existing events
+            new_events = [e for e in events if e.external_id not in existing_ids]
+            filtered_count = len(events) - len(new_events)
+
+            if filtered_count > 0:
+                logger.info(
+                    "filtered_existing_events",
+                    source=self.config.source_slug,
+                    total=len(events),
+                    existing=filtered_count,
+                    new=len(new_events),
+                )
+
+            return new_events, filtered_count
+
+        except Exception as e:
+            logger.warning(
+                "filter_existing_failed",
+                source=self.config.source_slug,
+                error=str(e),
+            )
+            # On error, return all events (don't filter)
+            return events, 0
 
     def _run_enrichment(self, events: list[EventCreate]) -> dict[str, Any]:
         """Run LLM enrichment on events."""
