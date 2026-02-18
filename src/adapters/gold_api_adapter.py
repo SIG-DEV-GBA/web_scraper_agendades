@@ -581,6 +581,13 @@ class GoldAPIAdapter(BaseAdapter):
 
             # Apply limit if specified
             if limit and len(all_items) > limit:
+                # For non-paginated sources (like Madrid), randomize before limiting
+                # This ensures each run gets different events, not always the first N
+                if self.gold_config.pagination_type == PaginationType.NONE:
+                    import random
+                    random.shuffle(all_items)
+                    self.logger.info("randomized_before_limit", source=self.source_id, reason="pagination_type=NONE")
+
                 self.logger.info("applying_limit", source=self.source_id, original=len(all_items), limited=limit)
                 all_items = all_items[:limit]
 
