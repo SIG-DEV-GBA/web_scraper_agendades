@@ -496,7 +496,9 @@ class InsertionPipeline:
         tier = self.source_config.tier
 
         if tier == SourceTier.GOLD:
-            return await self.adapter.fetch_events(max_pages=3, limit=self.config.limit)
+            # For Gold tier, don't apply limit at fetch - it will be applied AFTER filter_existing
+            # This ensures we don't skip existing events that are at the start of the API response
+            return await self.adapter.fetch_events(max_pages=10)
 
         elif tier == SourceTier.BRONZE:
             return await self.adapter.fetch_events(
