@@ -340,6 +340,14 @@ class InsertionPipeline:
             result.success = False
             result.error = str(e)
 
+        finally:
+            # Cleanup: close any Playwright browser to prevent orphan processes
+            if self.adapter and hasattr(self.adapter, "close_browser"):
+                try:
+                    await self.adapter.close_browser()
+                except Exception as cleanup_err:
+                    logger.warning("browser_cleanup_failed", error=str(cleanup_err))
+
         result.duration_seconds = (datetime.now() - start_time).total_seconds()
         return result
 
@@ -459,6 +467,14 @@ class InsertionPipeline:
             # Still update counts for what we did process
             result.inserted_count = total_inserted
             result.skipped_existing = total_skipped
+
+        finally:
+            # Cleanup: close any Playwright browser to prevent orphan processes
+            if self.adapter and hasattr(self.adapter, "close_browser"):
+                try:
+                    await self.adapter.close_browser()
+                except Exception as cleanup_err:
+                    logger.warning("browser_cleanup_failed", error=str(cleanup_err))
 
         result.duration_seconds = (datetime.now() - start_time).total_seconds()
         return result

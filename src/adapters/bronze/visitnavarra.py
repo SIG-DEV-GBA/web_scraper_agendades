@@ -205,6 +205,8 @@ class VisitNavarraAdapter(BaseAdapter):
         finally:
             if page:
                 await page.close()
+            # Close browser to prevent orphan Chromium processes
+            await self.close_browser()
 
     def _parse_link_element(self, link) -> dict[str, Any] | None:
         """Parse a single link element into event data.
