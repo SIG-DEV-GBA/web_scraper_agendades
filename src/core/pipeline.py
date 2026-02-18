@@ -151,7 +151,11 @@ class InsertionPipeline:
             # Step 2: Create adapter
             self.adapter = self._create_adapter()
 
-            # Step 3: Fetch events
+            # Use full streaming for Viralagenda (fetch details + enrich + insert per batch)
+            if self.config.source_slug.startswith("viralagenda_") and self.config.streaming_insert:
+                return await self._run_streaming_viralagenda(result, start_time)
+
+            # Step 3: Fetch events (non-streaming path)
             raw_events = await self._fetch_events()
             result.raw_count = len(raw_events)
 
@@ -280,6 +284,119 @@ class InsertionPipeline:
             )
             result.success = False
             result.error = str(e)
+
+        result.duration_seconds = (datetime.now() - start_time).total_seconds()
+        return result
+
+    async def _run_streaming_viralagenda(
+        self,
+        result: PipelineResult,
+        start_time: datetime,
+    ) -> PipelineResult:
+        """Run Viralagenda pipeline with full streaming.
+
+        Fetches details, enriches, and inserts in batches of 5.
+        Each batch is saved immediately, so crashes don't lose all progress.
+        """
+        batch_size = self.config.streaming_batch_size
+        total_inserted = 0
+        total_skipped = 0
+        total_failed = 0
+        total_images = 0
+        total_enriched = 0
+        total_raw = 0
+        total_parsed = 0
+        all_events = []  # For category/province stats
+
+        try:
+            logger.info(
+                "streaming_pipeline_start",
+                source=self.config.source_slug,
+                batch_size=batch_size,
+            )
+
+            # Use streaming generator from adapter
+            async for raw_batch in self.adapter.fetch_events_streaming(
+                batch_size=batch_size,
+                limit=self.config.limit,
+            ):
+                total_raw += len(raw_batch)
+
+                # Parse and filter batch
+                events, skipped = self._parse_and_filter(raw_batch)
+                total_parsed += len(events)
+                result.skipped_past += skipped
+
+                if not events:
+                    continue
+
+                # Enrich batch
+                batch_enrichments = {}
+                if not self.config.skip_enrichment:
+                    batch_enrichments = self._run_enrichment(events)
+                    self._apply_enrichments(events, batch_enrichments)
+                    total_enriched += len(batch_enrichments)
+
+                # Fetch images for batch
+                if not self.config.skip_images:
+                    images = self._fetch_images(events, batch_enrichments)
+                    total_images += images
+
+                # Insert batch immediately (unless dry run)
+                if self.config.dry_run:
+                    logger.info(
+                        "streaming_batch_dry_run",
+                        source=self.config.source_slug,
+                        would_insert=len(events),
+                    )
+                else:
+                    stats = await self._insert_events(events)
+                    total_inserted += stats["inserted"]
+                    total_skipped += stats["skipped"]
+                    total_failed += stats["failed"]
+
+                    logger.info(
+                        "streaming_batch_inserted",
+                        source=self.config.source_slug,
+                        inserted=stats["inserted"],
+                        total_so_far=total_inserted,
+                    )
+
+                # Collect for stats
+                all_events.extend(events)
+
+            # Update result
+            result.raw_count = total_raw
+            result.parsed_count = total_parsed
+            result.limited_count = total_parsed
+            result.enriched_count = total_enriched
+            result.images_found = total_images
+            result.inserted_count = total_inserted
+            result.skipped_existing = total_skipped
+            result.failed_count = total_failed
+            result.categories = self._count_categories(all_events)
+            result.provinces = self._count_provinces(all_events)
+            result.success = True
+
+            logger.info(
+                "streaming_pipeline_complete",
+                source=self.config.source_slug,
+                total_inserted=total_inserted,
+                total_skipped=total_skipped,
+            )
+
+        except Exception as e:
+            logger.error(
+                "streaming_pipeline_error",
+                source=self.config.source_slug,
+                error=str(e),
+                inserted_before_error=total_inserted,
+            )
+            result.success = False
+            result.error = str(e)
+            # Still update counts for what we did process
+            result.inserted_count = total_inserted
+            result.skipped_existing = total_skipped
 
         result.duration_seconds = (datetime.now() - start_time).total_seconds()
         return result

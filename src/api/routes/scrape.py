@@ -575,3 +575,150 @@ async def preview_source(source_slug: str):
             valid_count=0,
             error=str(e),
         )
+
+
+# ============================================================
+# BATCH VIRALAGENDA ENDPOINT (for cron jobs)
+# ============================================================
+
+# Valid Viralagenda sources (only CCAA that exist)
+VALID_VIRALAGENDA_SOURCES = [
+    # Andalucía (8)
+    "viralagenda_almeria", "viralagenda_cadiz", "viralagenda_cordoba",
+    "viralagenda_granada", "viralagenda_huelva", "viralagenda_jaen",
+    "viralagenda_malaga", "viralagenda_sevilla",
+    # Castilla y León (9)
+    "viralagenda_avila", "viralagenda_burgos", "viralagenda_leon",
+    "viralagenda_palencia", "viralagenda_salamanca", "viralagenda_segovia",
+    "viralagenda_soria", "viralagenda_valladolid", "viralagenda_zamora",
+    # Extremadura (2)
+    "viralagenda_caceres", "viralagenda_badajoz",
+    # Galicia (4)
+    "viralagenda_a_coruna", "viralagenda_lugo", "viralagenda_ourense",
+    "viralagenda_pontevedra",
+]
+
+
+class BatchViralAgendaRequest(BaseModel):
+    """Request for batch Viralagenda scraping."""
+    limit: int = Field(40, ge=1, le=100, description="Max events per source")
+    min_events: int = Field(40, ge=1, description="Skip sources with >= this many events")
+    dry_run: bool = Field(False, description="Don't save to database")
+
+
+class BatchViralAgendaResponse(BaseModel):
+    """Response from batch Viralagenda endpoint."""
+    job_id: str
+    status: JobStatus
+    message: str
+    sources_to_process: int
+    sources_skipped: int
+    sources: list[str]
+
+
+async def get_viralagenda_counts() -> dict[str, int]:
+    """Get event counts per Viralagenda source from DB."""
+    from src.core.supabase_client import get_supabase_client
+
+    sb = get_supabase_client()
+    result = sb.client.table('events').select('external_id').like('external_id', 'viralagenda_%').execute()
+
+    counts = {}
+    for row in result.data:
+        ext_id = row['external_id']
+        parts = ext_id.split('_')
+        if len(parts) >= 2:
+            source = f'{parts[0]}_{parts[1]}'
+            counts[source] = counts.get(source, 0) + 1
+
+    return counts
+
+
+@router.post("/batch/viralagenda", response_model=BatchViralAgendaResponse)
+async def batch_viralagenda(
+    request: BatchViralAgendaRequest,
+    background_tasks: BackgroundTasks,
+):
+    """Run batch scraping for all valid Viralagenda sources.
+
+    Skips sources that already have >= min_events in the database.
+    Processes sources one at a time with delays to avoid blocking.
+
+    Use this endpoint for weekly cron jobs:
+    - Cron: 0 19 * * 3 (every Wednesday at 19:00)
+    - Command: curl -X POST http://localhost:8000/scrape/batch/viralagenda
+    """
+    # Get current counts
+    counts = await get_viralagenda_counts()
+
+    # Filter sources to process
+    sources_to_run = []
+    sources_skipped = []
+
+    for source in VALID_VIRALAGENDA_SOURCES:
+        current = counts.get(source, 0)
+        if current >= request.min_events:
+            sources_skipped.append(source)
+        else:
+            sources_to_run.append(source)
+
+    if not sources_to_run:
+        return BatchViralAgendaResponse(
+            job_id="none",
+            status=JobStatus.COMPLETED,
+            message="All sources already have enough events",
+            sources_to_process=0,
+            sources_skipped=len(sources_skipped),
+            sources=[],
+        )
+
+    # Create job
+    job_id = str(uuid4())[:8]
+    _jobs[job_id] = {
+        "status": JobStatus.PENDING,
+        "started_at": None,
+        "completed_at": None,
+        "duration_seconds": None,
+        "sources_total": len(sources_to_run),
+        "sources_completed": 0,
+        "events_fetched": 0,
+        "events_parsed": 0,
+        "events_inserted": 0,
+        "events_skipped": 0,
+        "events_failed": 0,
+        "errors": [],
+        "logs": [],
+        "results": {},
+        "config": {
+            "sources": sources_to_run,
+            "filter": "batch_viralagenda",
+            "limit": request.limit,
+            "dry_run": request.dry_run,
+            "skipped_sources": sources_skipped,
+        },
+    }
+
+    # Start background task
+    background_tasks.add_task(
+        run_scrape_job,
+        job_id,
+        sources_to_run,
+        request.limit,
+        request.dry_run,
+    )
+
+    logger.info(
+        "batch_viralagenda_started",
+        job_id=job_id,
+        sources_to_process=len(sources_to_run),
+        sources_skipped=len(sources_skipped),
+    )
+
+    return BatchViralAgendaResponse(
+        job_id=job_id,
+        status=JobStatus.PENDING,
+        message=f"Batch job started: {len(sources_to_run)} sources to process, {len(sources_skipped)} skipped",
+        sources_to_process=len(sources_to_run),
+        sources_skipped=len(sources_skipped),
+        sources=sources_to_run,
+    )

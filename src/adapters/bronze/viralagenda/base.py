@@ -450,6 +450,106 @@ class ViralAgendaAdapter(BaseAdapter):
 
         return events
 
+    async def fetch_events_streaming(
+        self,
+        batch_size: int = 5,
+        limit: int | None = None,
+    ):
+        """Fetch events in streaming batches - fetch details, yield batch immediately.
+
+        This is more resilient to crashes as each batch is yielded for
+        immediate processing/insertion before fetching the next batch.
+
+        Args:
+            batch_size: Number of events per batch (default 5)
+            limit: Max total events to fetch
+
+        Yields:
+            List of raw event dictionaries (batch_size at a time)
+        """
+        try:
+            # Step 1: Fetch listing page (all cards)
+            self.logger.info(
+                "streaming_fetch_start",
+                source=self.source_id,
+                url=self.source_url,
+            )
+
+            html = await self._fetch_with_playwright(limit=limit)
+
+            if not html:
+                self.logger.warning("playwright_empty_response", source=self.source_id)
+                return
+
+            # Parse all cards from listing
+            soup = BeautifulSoup(html, "html.parser")
+            cards = soup.select(self.EVENT_CARD_SELECTOR)
+
+            self.logger.info(
+                "streaming_cards_found",
+                source=self.source_id,
+                count=len(cards),
+            )
+
+            # Parse cards into basic event data (no details yet)
+            all_events = []
+            for card in cards:
+                event = self._parse_card(card)
+                if event:
+                    all_events.append(event)
+
+            # Apply limit
+            if limit and len(all_events) > limit:
+                all_events = all_events[:limit]
+
+            total_events = len(all_events)
+            total_batches = (total_events + batch_size - 1) // batch_size
+
+            self.logger.info(
+                "streaming_batches_planned",
+                source=self.source_id,
+                total_events=total_events,
+                batch_size=batch_size,
+                total_batches=total_batches,
+            )
+
+            # Step 2: Process in batches - fetch details and yield
+            for batch_num, i in enumerate(range(0, total_events, batch_size), 1):
+                batch = all_events[i:i + batch_size]
+
+                self.logger.info(
+                    "streaming_batch_fetch_start",
+                    source=self.source_id,
+                    batch=f"{batch_num}/{total_batches}",
+                    events=len(batch),
+                )
+
+                # Delay before batch (anti-blocking)
+                if batch_num > 1:
+                    delay = random.uniform(3, 6)
+                    await asyncio.sleep(delay)
+
+                # Fetch details for this batch only
+                await self._fetch_details(batch)
+
+                self.logger.info(
+                    "streaming_batch_fetch_complete",
+                    source=self.source_id,
+                    batch=f"{batch_num}/{total_batches}",
+                    with_description=sum(1 for e in batch if e.get("description")),
+                )
+
+                # Yield batch for immediate processing/insertion
+                yield batch
+
+        except Exception as e:
+            self.logger.error(
+                "streaming_fetch_error",
+                source=self.source_id,
+                error=str(e),
+            )
+            raise
+
     def _parse_card(self, card: BeautifulSoup) -> dict[str, Any] | None:
         """Parse a single event card from the listing page."""
         try:
