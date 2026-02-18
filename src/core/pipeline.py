@@ -54,6 +54,8 @@ class PipelineConfig:
     skip_images: bool = False
     batch_size: int = 10
     debug_prefix: bool = False  # Add source prefix to titles for testing
+    streaming_insert: bool = True  # Insert events in batches instead of all at end
+    streaming_batch_size: int = 5  # How many events to process before inserting
 
 
 @dataclass
@@ -186,33 +188,87 @@ class InsertionPipeline:
                     if not event.title.startswith("["):
                         event.title = prefix + event.title
 
-            # Step 6: LLM enrichment
-            if not self.config.skip_enrichment:
-                enrichments = self._run_enrichment(events)
-                self._apply_enrichments(events, enrichments)
-                result.enriched_count = len(enrichments)
+            # Streaming mode: process and insert in batches
+            if self.config.streaming_insert and not self.config.dry_run:
+                batch_size = self.config.streaming_batch_size
+                total_inserted = 0
+                total_skipped = 0
+                total_failed = 0
+                total_images = 0
 
-            # Step 7: Fetch images
-            if not self.config.skip_images:
-                images_found = self._fetch_images(events, enrichments if not self.config.skip_enrichment else {})
-                result.images_found = images_found
+                for i in range(0, len(events), batch_size):
+                    batch = events[i:i + batch_size]
+                    batch_num = (i // batch_size) + 1
+                    total_batches = (len(events) + batch_size - 1) // batch_size
 
-            # Step 8: Calculate distributions
+                    logger.info(
+                        "streaming_batch_start",
+                        source=self.config.source_slug,
+                        batch=f"{batch_num}/{total_batches}",
+                        events=len(batch),
+                    )
+
+                    # Enrich batch
+                    batch_enrichments = {}
+                    if not self.config.skip_enrichment:
+                        batch_enrichments = self._run_enrichment(batch)
+                        self._apply_enrichments(batch, batch_enrichments)
+                        result.enriched_count += len(batch_enrichments)
+
+                    # Fetch images for batch
+                    if not self.config.skip_images:
+                        images = self._fetch_images(batch, batch_enrichments)
+                        total_images += images
+
+                    # Insert batch immediately
+                    stats = await self._insert_events(batch)
+                    total_inserted += stats["inserted"]
+                    total_skipped += stats["skipped"]
+                    total_failed += stats["failed"]
+
+                    logger.info(
+                        "streaming_batch_complete",
+                        source=self.config.source_slug,
+                        batch=f"{batch_num}/{total_batches}",
+                        inserted=stats["inserted"],
+                        skipped=stats["skipped"],
+                    )
+
+                result.inserted_count = total_inserted
+                result.skipped_existing = total_skipped
+                result.failed_count = total_failed
+                result.images_found = total_images
+
+            else:
+                # Original non-streaming mode
+                # Step 6: LLM enrichment
+                enrichments = {}
+                if not self.config.skip_enrichment:
+                    enrichments = self._run_enrichment(events)
+                    self._apply_enrichments(events, enrichments)
+                    result.enriched_count = len(enrichments)
+
+                # Step 7: Fetch images
+                if not self.config.skip_images:
+                    images_found = self._fetch_images(events, enrichments)
+                    result.images_found = images_found
+
+                # Step 8: Insert to Supabase (or dry run)
+                if self.config.dry_run:
+                    logger.info(
+                        "pipeline_dry_run",
+                        source=self.config.source_slug,
+                        would_insert=len(events),
+                    )
+                else:
+                    stats = await self._insert_events(events)
+                    result.inserted_count = stats["inserted"]
+                    result.skipped_existing = stats["skipped"]
+                    result.failed_count = stats["failed"]
+
+            # Calculate distributions
             result.categories = self._count_categories(events)
             result.provinces = self._count_provinces(events)
-
-            # Step 9: Insert to Supabase (or dry run)
-            if self.config.dry_run:
-                logger.info(
-                    "pipeline_dry_run",
-                    source=self.config.source_slug,
-                    would_insert=len(events),
-                )
-            else:
-                stats = await self._insert_events(events)
-                result.inserted_count = stats["inserted"]
-                result.skipped_existing = stats["skipped"]
-                result.failed_count = stats["failed"]
 
             result.success = True
 
