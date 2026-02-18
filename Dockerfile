@@ -44,9 +44,8 @@ ENV PORT=8000
 
 EXPOSE 8000
 
-# Health check with longer timeout for heavy scraping jobs
-HEALTHCHECK --interval=30s --timeout=60s --start-period=30s --retries=5 \
-    CMD curl -f http://localhost:8000/ || exit 1
+# Healthcheck disabled - long-running scrape jobs block the main thread
+HEALTHCHECK NONE
 
 # Use ENTRYPOINT so it cannot be overridden by CMD
 ENTRYPOINT ["./entrypoint.sh"]
