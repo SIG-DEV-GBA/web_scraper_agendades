@@ -1,7 +1,6 @@
 """Scrape routes - execute scraping jobs using the unified pipeline."""
 
 from datetime import datetime
-from enum import Enum
 from typing import Any
 from uuid import uuid4
 
@@ -10,6 +9,16 @@ from pydantic import BaseModel, Field
 
 from src.config.sources import SourceRegistry, SourceTier
 from src.core.pipeline import run_pipeline, PipelineResult
+from src.core.job_store import (
+    JobStatus,
+    LogLevel,
+    create_job,
+    get_job,
+    update_job,
+    add_job_log,
+    list_jobs as list_jobs_from_store,
+    delete_job as delete_job_from_store,
+)
 from src.logging import get_logger
 
 logger = get_logger(__name__)
@@ -19,25 +28,6 @@ router = APIRouter()
 import src.config.sources.gold_sources  # noqa
 import src.config.sources.silver_sources  # noqa
 import src.config.sources.bronze_sources  # noqa
-
-# In-memory job storage (for production, use Redis or DB)
-_jobs: dict[str, dict[str, Any]] = {}
-
-
-class JobStatus(str, Enum):
-    """Job status enum."""
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class LogLevel(str, Enum):
-    """Log level for job logs."""
-    INFO = "info"
-    SUCCESS = "success"
-    WARNING = "warning"
-    ERROR = "error"
 
 
 class ScrapeRequest(BaseModel):
@@ -87,17 +77,6 @@ class JobStatusResponse(BaseModel):
     config: dict[str, Any] | None
 
 
-def add_job_log(job: dict, level: LogLevel, message: str, source: str | None = None, details: dict | None = None):
-    """Add a log entry to the job."""
-    job["logs"].append({
-        "timestamp": datetime.now().isoformat(),
-        "level": level,
-        "message": message,
-        "source": source,
-        "details": details,
-    })
-
-
 def find_sources_by_province(province: str) -> list[str]:
     """Find all sources that match a province name."""
     province_lower = province.lower().replace(" ", "_")
@@ -143,15 +122,21 @@ async def run_scrape_job(
     dry_run: bool,
 ):
     """Background task to run scraping using the unified pipeline."""
-    job = _jobs[job_id]
-    job["status"] = JobStatus.RUNNING
-    job["started_at"] = datetime.now().isoformat()
+    # Get job from store (persisted)
+    job = get_job(job_id)
+    if not job:
+        logger.error("job_not_found", job_id=job_id)
+        return
 
-    add_job_log(job, LogLevel.INFO, f"Job iniciado para {len(sources)} fuentes", details={"sources": sources})
+    started_at = datetime.now().isoformat()
+    update_job(job_id, {"status": JobStatus.RUNNING, "started_at": started_at})
+    job["started_at"] = started_at
+
+    add_job_log(job_id, LogLevel.INFO, f"Job iniciado para {len(sources)} fuentes", details={"sources": sources})
 
     for source_slug in sources:
         try:
-            add_job_log(job, LogLevel.INFO, f"Iniciando scraping", source=source_slug)
+            add_job_log(job_id, LogLevel.INFO, f"Iniciando scraping", source=source_slug)
             logger.info("scrape_job_source_start", job_id=job_id, source=source_slug)
 
             # Use the unified pipeline
@@ -162,81 +147,53 @@ async def run_scrape_job(
             )
 
             # Update job stats
-            job["events_fetched"] += result.raw_count
-            job["events_parsed"] += result.parsed_count
+            job["events_fetched"] = job.get("events_fetched", 0) + result.raw_count
+            job["events_parsed"] = job.get("events_parsed", 0) + result.parsed_count
 
             if result.success:
-                job["events_inserted"] += result.inserted_count
-                job["events_skipped"] += result.skipped_existing
+                job["events_inserted"] = job.get("events_inserted", 0) + result.inserted_count
+                job["events_skipped"] = job.get("events_skipped", 0) + result.skipped_existing
 
                 # Log progress
-                add_job_log(
-                    job, LogLevel.INFO,
-                    f"Obtenidos {result.raw_count} eventos raw",
-                    source=source_slug
-                )
+                add_job_log(job_id, LogLevel.INFO, f"Obtenidos {result.raw_count} eventos raw", source=source_slug)
 
                 # Warning if limit not reached
                 if result.requested_limit and not result.limit_reached:
                     add_job_log(
-                        job, LogLevel.WARNING,
+                        job_id, LogLevel.WARNING,
                         f"Solicitados {result.requested_limit} eventos pero solo hay {result.limited_count} disponibles",
                         source=source_slug,
                         details={"requested": result.requested_limit, "available": result.limited_count}
                     )
 
                 if result.skipped_past > 0:
-                    add_job_log(
-                        job, LogLevel.INFO,
-                        f"Filtrados {result.skipped_past} eventos pasados",
-                        source=source_slug
-                    )
+                    add_job_log(job_id, LogLevel.INFO, f"Filtrados {result.skipped_past} eventos pasados", source=source_slug)
 
-                add_job_log(
-                    job, LogLevel.SUCCESS,
-                    f"Parseados {result.parsed_count} eventos válidos",
-                    source=source_slug
-                )
+                # Log filtered existing (new feature)
+                if result.filtered_existing > 0:
+                    add_job_log(job_id, LogLevel.INFO, f"Omitidos {result.filtered_existing} eventos existentes", source=source_slug)
+
+                add_job_log(job_id, LogLevel.SUCCESS, f"Parseados {result.parsed_count} eventos válidos", source=source_slug)
 
                 if result.enriched_count > 0:
-                    add_job_log(
-                        job, LogLevel.SUCCESS,
-                        f"Enriquecidos {result.enriched_count} eventos con LLM",
-                        source=source_slug
-                    )
+                    add_job_log(job_id, LogLevel.SUCCESS, f"Enriquecidos {result.enriched_count} eventos con LLM", source=source_slug)
 
                 if result.images_found > 0:
-                    add_job_log(
-                        job, LogLevel.SUCCESS,
-                        f"Resueltas {result.images_found} imágenes",
-                        source=source_slug
-                    )
+                    add_job_log(job_id, LogLevel.SUCCESS, f"Resueltas {result.images_found} imágenes", source=source_slug)
 
                 if dry_run:
-                    add_job_log(
-                        job, LogLevel.INFO,
-                        "Modo dry_run - no se guardaron eventos",
-                        source=source_slug
-                    )
+                    add_job_log(job_id, LogLevel.INFO, "Modo dry_run - no se guardaron eventos", source=source_slug)
                 elif result.inserted_count > 0:
                     add_job_log(
-                        job, LogLevel.SUCCESS,
+                        job_id, LogLevel.SUCCESS,
                         f"Insertados {result.inserted_count} eventos",
                         source=source_slug,
-                        details={
-                            "inserted": result.inserted_count,
-                            "skipped": result.skipped_existing,
-                            "categories": result.categories,
-                        }
+                        details={"inserted": result.inserted_count, "skipped": result.skipped_existing, "categories": result.categories}
                     )
                 else:
-                    add_job_log(
-                        job, LogLevel.INFO,
-                        f"0 eventos nuevos (skipped: {result.skipped_existing})",
-                        source=source_slug
-                    )
+                    add_job_log(job_id, LogLevel.INFO, f"0 eventos nuevos (skipped: {result.skipped_existing})", source=source_slug)
 
-                job["results"][source_slug] = {
+                job.setdefault("results", {})[source_slug] = {
                     "fetched": result.raw_count,
                     "parsed": result.parsed_count,
                     "enriched": result.enriched_count,
@@ -246,10 +203,10 @@ async def run_scrape_job(
                     "error": None,
                 }
             else:
-                job["events_failed"] += 1
-                job["errors"].append(f"{source_slug}: {result.error}")
-                add_job_log(job, LogLevel.ERROR, f"Error: {result.error}", source=source_slug)
-                job["results"][source_slug] = {
+                job["events_failed"] = job.get("events_failed", 0) + 1
+                job.setdefault("errors", []).append(f"{source_slug}: {result.error}")
+                add_job_log(job_id, LogLevel.ERROR, f"Error: {result.error}", source=source_slug)
+                job.setdefault("results", {})[source_slug] = {
                     "fetched": result.raw_count,
                     "parsed": result.parsed_count,
                     "inserted": 0,
@@ -257,33 +214,52 @@ async def run_scrape_job(
                     "error": result.error,
                 }
 
-            job["sources_completed"] += 1
-            add_job_log(job, LogLevel.SUCCESS, f"Completado ({result.duration_seconds:.1f}s)", source=source_slug)
+            job["sources_completed"] = job.get("sources_completed", 0) + 1
+            add_job_log(job_id, LogLevel.SUCCESS, f"Completado ({result.duration_seconds:.1f}s)", source=source_slug)
+
+            # Persist progress after each source
+            update_job(job_id, {
+                "events_fetched": job["events_fetched"],
+                "events_parsed": job["events_parsed"],
+                "events_inserted": job["events_inserted"],
+                "events_skipped": job["events_skipped"],
+                "events_failed": job.get("events_failed", 0),
+                "sources_completed": job["sources_completed"],
+                "results": job.get("results", {}),
+                "errors": job.get("errors", []),
+            })
 
         except Exception as e:
             logger.error("scrape_job_source_error", job_id=job_id, source=source_slug, error=str(e))
-            add_job_log(job, LogLevel.ERROR, f"Error: {str(e)}", source=source_slug)
-            job["errors"].append(f"{source_slug}: {str(e)}")
-            job["events_failed"] += 1
-            job["results"][source_slug] = {"fetched": 0, "parsed": 0, "inserted": 0, "skipped": 0, "error": str(e)}
-            job["sources_completed"] += 1
+            add_job_log(job_id, LogLevel.ERROR, f"Error: {str(e)}", source=source_slug)
+            job.setdefault("errors", []).append(f"{source_slug}: {str(e)}")
+            job["events_failed"] = job.get("events_failed", 0) + 1
+            job.setdefault("results", {})[source_slug] = {"fetched": 0, "parsed": 0, "inserted": 0, "skipped": 0, "error": str(e)}
+            job["sources_completed"] = job.get("sources_completed", 0) + 1
 
-    job["status"] = JobStatus.COMPLETED
-    job["completed_at"] = datetime.now().isoformat()
-
-    # Calculate duration
+    completed_at = datetime.now().isoformat()
     start = datetime.fromisoformat(job["started_at"])
-    end = datetime.fromisoformat(job["completed_at"])
-    job["duration_seconds"] = (end - start).total_seconds()
+    end = datetime.fromisoformat(completed_at)
+    duration = (end - start).total_seconds()
 
-    add_job_log(job, LogLevel.SUCCESS,
-                f"Job completado: {job['events_inserted']} insertados, {job['events_skipped']} omitidos",
-                details={
-                    "total_inserted": job["events_inserted"],
-                    "total_skipped": job["events_skipped"],
-                    "duration_seconds": job["duration_seconds"],
-                })
-    logger.info("scrape_job_completed", job_id=job_id, inserted=job["events_inserted"])
+    update_job(job_id, {
+        "status": JobStatus.COMPLETED,
+        "completed_at": completed_at,
+        "duration_seconds": duration,
+        "results": job.get("results", {}),
+        "errors": job.get("errors", []),
+    })
+
+    add_job_log(
+        job_id, LogLevel.SUCCESS,
+        f"Job completado: {job.get('events_inserted', 0)} insertados, {job.get('events_skipped', 0)} omitidos",
+        details={
+            "total_inserted": job.get("events_inserted", 0),
+            "total_skipped": job.get("events_skipped", 0),
+            "duration_seconds": duration,
+        }
+    )
+    logger.info("scrape_job_completed", job_id=job_id, inserted=job.get("events_inserted", 0))
 
 
 @router.post("", response_model=ScrapeResponse)
@@ -318,30 +294,15 @@ async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks
     if not sources:
         raise HTTPException(status_code=400, detail=f"No sources found for filter: {filter_used}")
 
-    # Create job with enhanced tracking
+    # Create job in persistent store
     job_id = str(uuid4())[:8]
-    _jobs[job_id] = {
-        "status": JobStatus.PENDING,
-        "started_at": None,
-        "completed_at": None,
-        "duration_seconds": None,
-        "sources_total": len(sources),
-        "sources_completed": 0,
-        "events_fetched": 0,
-        "events_parsed": 0,
-        "events_inserted": 0,
-        "events_skipped": 0,
-        "events_failed": 0,
-        "errors": [],
-        "logs": [],
-        "results": {},
-        "config": {
-            "sources": sources,
-            "filter": filter_used,
-            "limit": request.limit,
-            "dry_run": request.dry_run,
-        },
+    config = {
+        "sources": sources,
+        "filter": filter_used,
+        "limit": request.limit,
+        "dry_run": request.dry_run,
     }
+    create_job(job_id, sources, config)
 
     # Start background task
     background_tasks.add_task(
@@ -363,30 +324,36 @@ async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks
 @router.get("/status/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(job_id: str):
     """Get detailed status of a scrape job including logs."""
-    if job_id not in _jobs:
+    job = get_job(job_id)
+    if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
-
-    job = _jobs[job_id]
 
     # Convert log dicts to JobLog models
     logs = [JobLog(**log) for log in job.get("logs", [])]
 
+    # Handle status as enum or string
+    status = job.get("status")
+    if hasattr(status, "value"):
+        status = status
+    else:
+        status = JobStatus(status) if status else JobStatus.PENDING
+
     return JobStatusResponse(
         job_id=job_id,
-        status=job["status"],
-        started_at=job["started_at"],
-        completed_at=job["completed_at"],
+        status=status,
+        started_at=job.get("started_at"),
+        completed_at=job.get("completed_at"),
         duration_seconds=job.get("duration_seconds"),
-        sources_total=job["sources_total"],
-        sources_completed=job["sources_completed"],
-        events_fetched=job["events_fetched"],
+        sources_total=job.get("sources_total", 0),
+        sources_completed=job.get("sources_completed", 0),
+        events_fetched=job.get("events_fetched", 0),
         events_parsed=job.get("events_parsed", 0),
-        events_inserted=job["events_inserted"],
+        events_inserted=job.get("events_inserted", 0),
         events_skipped=job.get("events_skipped", 0),
         events_failed=job.get("events_failed", 0),
-        errors=job["errors"],
+        errors=job.get("errors", []),
         logs=logs,
-        results=job["results"] if job["status"] == JobStatus.COMPLETED else None,
+        results=job.get("results") if status == JobStatus.COMPLETED else None,
         config=job.get("config"),
     )
 
@@ -399,15 +366,18 @@ async def get_job_logs(job_id: str, since: int = 0):
         job_id: The job ID
         since: Return only logs after this index (for incremental updates)
     """
-    if job_id not in _jobs:
+    job = get_job(job_id)
+    if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-    job = _jobs[job_id]
     logs = job.get("logs", [])
+    status = job.get("status")
+    if hasattr(status, "value"):
+        status = status.value
 
     return {
         "job_id": job_id,
-        "status": job["status"],
+        "status": status,
         "total_logs": len(logs),
         "logs": logs[since:],
         "next_index": len(logs),
@@ -415,43 +385,33 @@ async def get_job_logs(job_id: str, since: int = 0):
 
 
 @router.get("/jobs")
-async def list_jobs(limit: int = 20):
+async def list_jobs_endpoint(limit: int = 20):
     """List all scrape jobs with summary info."""
-    jobs_list = []
-    for jid, job in list(_jobs.items())[-limit:]:
-        jobs_list.append({
-            "job_id": jid,
-            "status": job["status"],
-            "filter": job.get("config", {}).get("filter", "unknown"),
-            "sources_total": job["sources_total"],
-            "sources_completed": job["sources_completed"],
-            "events_inserted": job["events_inserted"],
-            "events_skipped": job.get("events_skipped", 0),
-            "started_at": job["started_at"],
-            "completed_at": job["completed_at"],
-            "duration_seconds": job.get("duration_seconds"),
-            "has_errors": len(job["errors"]) > 0,
-        })
+    jobs_list = list_jobs_from_store(limit=limit)
 
     return {
-        "total": len(_jobs),
+        "total": len(jobs_list),
         "showing": len(jobs_list),
-        "jobs": list(reversed(jobs_list)),  # Most recent first
+        "jobs": jobs_list,
     }
 
 
 @router.delete("/jobs/{job_id}")
-async def delete_job(job_id: str):
-    """Delete a completed job from memory."""
-    if job_id not in _jobs:
+async def delete_job_endpoint(job_id: str):
+    """Delete a completed job from database."""
+    job = get_job(job_id)
+    if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 
-    job = _jobs[job_id]
-    if job["status"] == JobStatus.RUNNING:
+    status = job.get("status")
+    if status == JobStatus.RUNNING or status == "running":
         raise HTTPException(status_code=400, detail="Cannot delete a running job")
 
-    del _jobs[job_id]
-    return {"message": f"Job '{job_id}' deleted"}
+    deleted = delete_job_from_store(job_id)
+    if deleted:
+        return {"message": f"Job '{job_id}' deleted"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to delete job")
 
 
 @router.get("/provinces")
@@ -672,31 +632,16 @@ async def batch_viralagenda(
             sources=[],
         )
 
-    # Create job
+    # Create job in persistent store
     job_id = str(uuid4())[:8]
-    _jobs[job_id] = {
-        "status": JobStatus.PENDING,
-        "started_at": None,
-        "completed_at": None,
-        "duration_seconds": None,
-        "sources_total": len(sources_to_run),
-        "sources_completed": 0,
-        "events_fetched": 0,
-        "events_parsed": 0,
-        "events_inserted": 0,
-        "events_skipped": 0,
-        "events_failed": 0,
-        "errors": [],
-        "logs": [],
-        "results": {},
-        "config": {
-            "sources": sources_to_run,
-            "filter": "batch_viralagenda",
-            "limit": request.limit,
-            "dry_run": request.dry_run,
-            "skipped_sources": sources_skipped,
-        },
+    config = {
+        "sources": sources_to_run,
+        "filter": "batch_viralagenda",
+        "limit": request.limit,
+        "dry_run": request.dry_run,
+        "skipped_sources": sources_skipped,
     }
+    create_job(job_id, sources_to_run, config)
 
     # Start background task
     background_tasks.add_task(
