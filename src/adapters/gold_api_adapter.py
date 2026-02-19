@@ -1430,6 +1430,17 @@ class GoldAPIAdapter(BaseAdapter):
             start_date = raw_data.get("data_inici", "")
             end_date = raw_data.get("data_fi", "")
 
+            # Fix bad data: swap if end_date < start_date
+            if start_date and end_date:
+                try:
+                    from datetime import datetime
+                    start_dt = datetime.strptime(start_date.split()[0], "%Y-%m-%d").date()
+                    end_dt = datetime.strptime(end_date.split()[0], "%Y-%m-%d").date()
+                    if end_dt < start_dt:
+                        start_date, end_date = end_date, start_date
+                except (ValueError, IndexError):
+                    pass
+
             # Extract address data from nested grup_adreca
             grup_adreca = raw_data.get("grup_adreca", {}) or {}
             venue_name = grup_adreca.get("adreca_nom", "")
