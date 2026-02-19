@@ -1408,9 +1408,23 @@ class GoldAPIAdapter(BaseAdapter):
             # External ID
             external_id = raw_data.get("acte_id", "")
 
-            # Descriptions
-            summary = raw_data.get("descripcio", "")  # Short intro
-            description = raw_data.get("observacions", "")  # Full HTML description
+            # Descriptions - DIBA API is inconsistent, sometimes descripcio is longer
+            descripcio = raw_data.get("descripcio", "") or ""
+            observacions = raw_data.get("observacions", "") or ""
+
+            # Strip HTML tags for length comparison
+            descripcio_clean = re.sub(r'<[^>]+>', '', descripcio).strip()
+            observacions_clean = re.sub(r'<[^>]+>', '', observacions).strip()
+
+            # Assign based on length: shorter → summary, longer → description
+            if len(descripcio_clean) > len(observacions_clean) and observacions_clean:
+                # descripcio is longer, use it as description
+                summary = observacions
+                description = descripcio
+            else:
+                # Normal case or observacions is longer/equal
+                summary = descripcio
+                description = observacions
 
             # Dates - format: "2026-01-01 00:00:00"
             start_date = raw_data.get("data_inici", "")
