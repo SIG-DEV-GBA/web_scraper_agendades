@@ -15,10 +15,8 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from src.adapters import register_adapter
-from src.config.settings import get_settings
 from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType, OrganizerType
-from src.core.firecrawl_client import get_firecrawl_client
 from src.logging import get_logger
 from src.utils.contacts import extract_contact_info, extract_registration_info
 
@@ -367,13 +365,11 @@ class VisitNavarraAdapter(BaseAdapter):
         return unique_events
 
     async def _fetch_details(self, events: list[dict[str, Any]]) -> None:
-        """Fetch detail pages for full event data."""
-        # Get Firecrawl client
-        settings = get_settings()
-        firecrawl = get_firecrawl_client(
-            base_url=settings.firecrawl_url,
-            api_key=settings.firecrawl_api_key,
-        )
+        """Fetch detail pages for full event data using Playwright."""
+        import asyncio
+
+        # Reuse the same page for all detail fetches
+        page = await self.get_page()
 
         for i, event in enumerate(events):
             detail_url = event.get("detail_url")
@@ -381,22 +377,14 @@ class VisitNavarraAdapter(BaseAdapter):
                 continue
 
             try:
-                # Use Firecrawl for detail pages too
-                response = await firecrawl.scrape(
-                    detail_url,
-                    formats=["html", "markdown"],
-                    timeout=30000,
-                )
+                # Navigate to detail page with Playwright
+                await page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
+                await asyncio.sleep(0.5)  # Brief wait for content
 
-                if not response.success:
-                    self.logger.warning("detail_fetch_error", url=detail_url, error=response.error)
-                    continue
-
-                html = response.html or ""
-                markdown = response.markdown or ""
+                html = await page.content()
 
                 if html:
-                    details = self._parse_detail_page(html, markdown, detail_url)
+                    details = self._parse_detail_page(html, "", detail_url)
                     # Only update fields that we got from detail page
                     # Don't overwrite listing data with None values
                     for key, value in details.items():
@@ -408,6 +396,9 @@ class VisitNavarraAdapter(BaseAdapter):
 
                 if (i + 1) % 5 == 0:
                     self.logger.info("detail_fetch_progress", fetched=i + 1, total=len(events))
+
+                # Small delay between requests to be polite
+                await asyncio.sleep(0.3)
 
             except Exception as e:
                 self.logger.warning("detail_fetch_error", url=detail_url, error=str(e))
