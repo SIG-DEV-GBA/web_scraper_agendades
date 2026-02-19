@@ -2066,11 +2066,14 @@ class BronzeScraperAdapter(BaseAdapter):
                 elif config.image_selector:
                     img_elem = card.select_one(config.image_selector)
                     if img_elem:
-                        # Try src first, then data-src (lazy loading)
-                        image_url = img_elem.get("src") or img_elem.get("data-src")
-                        # Skip data URIs (SVG placeholders, base64, etc.)
-                        if image_url and image_url.startswith("data:"):
-                            image_url = None
+                        # Get both src and data-src (for lazy loading)
+                        src = img_elem.get("src")
+                        data_src = img_elem.get("data-src")
+                        # Prefer data-src if src is a data URI placeholder
+                        if src and src.startswith("data:"):
+                            image_url = data_src
+                        else:
+                            image_url = src or data_src
                         # Make relative URLs absolute
                         if image_url and not image_url.startswith("http"):
                             image_url = (config.base_url or "") + image_url
