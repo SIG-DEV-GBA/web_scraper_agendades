@@ -1491,8 +1491,9 @@ class BronzeScraperAdapter(BaseAdapter):
                 # Fallback: find first content image (not logo/icon/theme)
                 SKIP_IMAGE_PATTERNS = [
                     "logo", "icon", "avatar", "banner", "favicon",
-                    "/theme/", "-theme/", "/o/",  # Liferay theme paths
+                    "/theme/", "-theme/", "/themes/", "/o/",  # Theme paths
                     "sprite", "placeholder", "loading", "spinner",
+                    "feder", "footer", "header", "nav",  # Layout elements
                 ]
                 for img in soup.select("img"):
                     src = img.get("src", "")
@@ -2346,8 +2347,9 @@ class BronzeScraperAdapter(BaseAdapter):
                         event["is_free"] = details["is_free"]
                     if details.get("dates_raw"):
                         event["dates_raw"] = details["dates_raw"]
-                    # Prefer full-size og:image over thumbnail from listing
-                    if details.get("og_image"):
+                    # Only use og:image if we don't have a listing image
+                    # (listing images are often better - actual event photos vs generic og:image)
+                    if details.get("og_image") and not event.get("image_url"):
                         event["image_url"] = details["og_image"]
                     # Store page content for deep enrichment
                     if details.get("page_content"):
