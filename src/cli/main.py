@@ -1,7 +1,7 @@
 """Unified CLI for Agendades event scraper.
 
 Usage:
-    agendades insert --source catalunya_agenda --limit 20
+    agendades insert --source diba_barcelona --limit 20
     agendades insert --tier gold --dry-run
     agendades insert --ccaa "Cataluña" --limit 10
     agendades sources --tier gold
@@ -101,7 +101,7 @@ def insert(
     """Insert events from sources into Supabase.
 
     Examples:
-        agendades insert --source catalunya_agenda --limit 20
+        agendades insert --source diba_barcelona --limit 20
         agendades insert --tier gold --dry-run
         agendades insert --ccaa "Cataluña" --limit 10
         agendades insert --tier bronze --ccaa "Canarias"

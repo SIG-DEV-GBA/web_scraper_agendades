@@ -11,7 +11,7 @@ Usage:
     from src.core.pipeline import InsertionPipeline, PipelineConfig
 
     config = PipelineConfig(
-        source_slug="catalunya_agenda",
+        source_slug="diba_barcelona",
         limit=20,
         dry_run=True,
     )

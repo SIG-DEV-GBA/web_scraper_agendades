@@ -1,7 +1,7 @@
 """Entry point for running CLI as module.
 
 Usage:
-    python -m src.cli insert --source catalunya_agenda
+    python -m src.cli insert --source diba_barcelona
     python -m src.cli sources --tier gold
 """
 

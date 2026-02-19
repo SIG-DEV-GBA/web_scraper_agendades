@@ -5,7 +5,7 @@ normalizing them to the unified EventCreate model.
 
 Supported sources:
 - Madrid (JSON-LD)
-- Catalunya (Socrata/SODA)
+- DIBA Barcelona (Diputació de Barcelona API)
 - Euskadi (REST API)
 - Castilla y León (CKAN OData)
 - Andalucía (CKAN)
@@ -78,48 +78,41 @@ class GoldSourceConfig:
 # ============================================================
 
 GOLD_SOURCES: dict[str, GoldSourceConfig] = {
-    "catalunya_agenda": GoldSourceConfig(
-        slug="catalunya_agenda",
-        name="Agenda Cultural de Catalunya",
-        url="https://analisi.transparenciacatalunya.cat/resource/rhpv-yr4f.json",
-        ccaa="Catalunya",
+    "diba_barcelona": GoldSourceConfig(
+        slug="diba_barcelona",
+        name="Diputació de Barcelona - Agenda Turística",
+        url="https://do.diba.cat/api/dataset/actesturisme_es/format/json",
+        ccaa="Cataluña",
         ccaa_code="CT",
-        pagination_type=PaginationType.SOCRATA,
-        page_size=1000,
-        offset_param="$offset",
-        limit_param="$limit",
-        items_path="",  # Root is array
-        date_format="%Y-%m-%dT%H:%M:%S.%f",
-        free_value="Si",
-        free_field="gratuita",
-        image_url_prefix="https://agenda.cultura.gencat.cat",
+        pagination_type=PaginationType.NONE,
+        items_path="elements",  # API returns {"elements": [...]}
+        default_province="Barcelona",
+        datetime_format="%Y-%m-%d %H:%M:%S",
+        # Field mappings after preprocessing (flattened by _preprocess_diba)
         field_mappings={
-            "codi": "external_id",
-            "denominaci": "title",
-            "descripcio": "description",
-            "data_inici": "start_date",
-            "data_fi": "end_date",
-            "horari": "time_info",
-            "gratuita": "is_free_text",
-            "entrades": "price_info",
-            "espai": "venue_name",
-            "adre_a": "address",
-            "codi_postal": "postal_code",
-            "localitat": "city",
-            "comarca_i_municipi": "comarca",
-            "latitud": "latitude",
-            "longitud": "longitude",
-            "tags_categor_es": "category_tags",
-            "imatges": "images",
-            "linkbotoentrades": "external_url",
-            "subt_tol": "summary",  # Subtitle as summary
-            "url": "organizer_url",  # Venue/organizer website
-            "email": "contact_email",  # Contact email
-            "tel_fon": "contact_phone",  # Contact phone
-            "modalitat": "modality_text",  # "Presencial", "Online", "Híbrid"
-            "destacada": "is_featured_text",  # "Si" / "No"
+            "external_id": "external_id",
+            "title": "title",
+            "summary": "summary",
+            "description": "description",
+            "start_date": "start_date",
+            "end_date": "end_date",
+            "venue_name": "venue_name",
+            "address": "address",
+            "postal_code": "postal_code",
+            "city": "city",
+            "latitude": "latitude",
+            "longitude": "longitude",
+            "contact_phone": "contact_phone",
+            "contact_email": "contact_email",
+            "organizer_name": "organizer_name",
+            "organizer_url": "organizer_url",
+            "price_info": "price_info",
+            "category_tags": "category_tags",
+            "external_url": "external_url",
+            "image_url": "image_url",
         },
     ),
+    # NOTE: catalunya_agenda eliminado - reemplazado por diba_barcelona
     "euskadi_kulturklik": GoldSourceConfig(
         slug="euskadi_kulturklik",
         name="Kulturklik - Agenda Cultural Euskadi",
@@ -692,6 +685,12 @@ class GoldAPIAdapter(BaseAdapter):
     def parse_event(self, raw_data: dict[str, Any]) -> EventCreate | None:
         """Parse a single event from API format to EventCreate."""
         try:
+            # DIBA Barcelona: preprocesar datos (grup_adreca nested, coords en string)
+            if self.source_id == "diba_barcelona":
+                raw_data = self._preprocess_diba(raw_data)
+                if not raw_data:
+                    return None
+
             # Andalucía: preprocesar datos de la nueva API (contentapi)
             if self.source_id == "andalucia_agenda":
                 raw_data = self._preprocess_andalucia(raw_data)
@@ -847,7 +846,7 @@ class GoldAPIAdapter(BaseAdapter):
             # Accessibility
             accessibility_info = self._extract_accessibility(raw_data)
 
-            # Contact info (Catalunya has email, tel_fon)
+            # Contact info (email, phone)
             contact_email = get_mapped("contact_email")
             contact_phone = get_mapped("contact_phone")
             # Zaragoza: use preprocessed contact info
@@ -875,7 +874,7 @@ class GoldAPIAdapter(BaseAdapter):
 
             # Registration URL: from price_info HTML, description, or from ticket-type external_url
             registration_url = registration_url_from_price or desc_urls["registration_url"]
-            if not registration_url and external_url and self.source_id in ("euskadi_kulturklik", "catalunya_agenda", "zaragoza_cultura"):
+            if not registration_url and external_url and self.source_id in ("euskadi_kulturklik", "zaragoza_cultura"):
                 # These sources map ticket/purchase URLs as external_url
                 # Only copy if URL looks like a ticket/booking site
                 ticket_patterns = [
@@ -887,7 +886,7 @@ class GoldAPIAdapter(BaseAdapter):
                 if any(p in url_lower for p in ticket_patterns):
                     registration_url = external_url
 
-            # Parse modality (Catalunya: "Presencial", "Online", "Híbrid")
+            # Parse modality ("Presencial", "Online", "Híbrid")
             location_type = LocationType.PHYSICAL
             modality_text = get_mapped("modality_text")
             if modality_text:
@@ -897,7 +896,7 @@ class GoldAPIAdapter(BaseAdapter):
                 elif "híbrid" in modality_lower or "hibrid" in modality_lower:
                     location_type = LocationType.HYBRID
 
-            # Parse is_featured (Catalunya: "Si" / "No")
+            # Parse is_featured ("Si" / "No")
             is_featured = False
             is_featured_text = get_mapped("is_featured_text")
             if is_featured_text:
@@ -1386,6 +1385,122 @@ class GoldAPIAdapter(BaseAdapter):
                             return f"{prefix}{url}" if not url.startswith("http") else url
 
         return None
+
+    def _preprocess_diba(self, raw_data: dict[str, Any]) -> dict[str, Any] | None:
+        """Preprocess DIBA Barcelona data to flat structure.
+
+        DIBA API returns:
+        - grup_adreca: nested dict with address info
+        - telefon_contacte: array of phone strings
+        - tags: array of category strings
+        - observacions: HTML description (long)
+        - descripcio: short description/summary
+        - localitzacio: "lat,lon" string in grup_adreca
+
+        Returns flattened dict for generic parser.
+        """
+        try:
+            # Required: title
+            title = raw_data.get("titol", "")
+            if not title:
+                return None
+
+            # External ID
+            external_id = raw_data.get("acte_id", "")
+
+            # Descriptions
+            summary = raw_data.get("descripcio", "")  # Short intro
+            description = raw_data.get("observacions", "")  # Full HTML description
+
+            # Dates - format: "2026-01-01 00:00:00"
+            start_date = raw_data.get("data_inici", "")
+            end_date = raw_data.get("data_fi", "")
+
+            # Extract address data from nested grup_adreca
+            grup_adreca = raw_data.get("grup_adreca", {}) or {}
+            venue_name = grup_adreca.get("adreca_nom", "")
+            address = grup_adreca.get("adreca", "")
+            postal_code = grup_adreca.get("codi_postal", "")
+            city = grup_adreca.get("municipi_nom", "")
+
+            # Parse coordinates from "lat,lon" string
+            latitude = None
+            longitude = None
+            localitzacio = grup_adreca.get("localitzacio", "")
+            if localitzacio and "," in localitzacio:
+                try:
+                    lat_str, lon_str = localitzacio.split(",")
+                    latitude = float(lat_str.strip())
+                    longitude = float(lon_str.strip())
+                except (ValueError, TypeError):
+                    pass
+
+            # Contact - telefon_contacte is an array
+            contact_phone = None
+            telefons = raw_data.get("telefon_contacte", [])
+            if telefons and isinstance(telefons, list) and len(telefons) > 0:
+                contact_phone = telefons[0] if telefons[0] else None
+
+            # Email can be string or empty array
+            contact_email = None
+            email_raw = raw_data.get("email")
+            if email_raw and isinstance(email_raw, str):
+                contact_email = email_raw
+            elif email_raw and isinstance(email_raw, list) and len(email_raw) > 0:
+                contact_email = email_raw[0] if email_raw[0] else None
+
+            # Organizer
+            organizer_name = raw_data.get("acte_organitzadors", "")
+            organizer_url = raw_data.get("url_general", "")
+
+            # Price - "Activitat pagament" = paid, "Gratuït" = free
+            price_info = raw_data.get("preu", "")
+
+            # Category tags - array of strings
+            tags = raw_data.get("tags", [])
+            category_tags = ", ".join(tags) if isinstance(tags, list) else ""
+
+            # External URL
+            external_url = raw_data.get("acte_url", "")
+
+            # Image URL (often null/empty array in DIBA)
+            image_url = None
+            imatge_raw = raw_data.get("imatge")
+            if imatge_raw and isinstance(imatge_raw, str):
+                image_url = imatge_raw
+            elif imatge_raw and isinstance(imatge_raw, list) and len(imatge_raw) > 0:
+                image_url = imatge_raw[0] if imatge_raw[0] else None
+
+            # Return flattened structure
+            return {
+                "external_id": external_id,
+                "title": title,
+                "summary": summary,
+                "description": description,
+                "start_date": start_date,
+                "end_date": end_date,
+                "venue_name": venue_name,
+                "address": address,
+                "postal_code": postal_code,
+                "city": city,
+                "latitude": latitude,
+                "longitude": longitude,
+                "contact_phone": contact_phone,
+                "contact_email": contact_email,
+                "organizer_name": organizer_name,
+                "organizer_url": organizer_url,
+                "price_info": price_info,
+                "category_tags": category_tags,
+                "external_url": external_url,
+                "image_url": image_url,
+            }
+
+        except Exception as e:
+            self.logger.warning(
+                "diba_preprocess_error",
+                error=str(e),
+            )
+            return None
 
     def _preprocess_andalucia(self, raw_data: dict[str, Any]) -> dict[str, Any] | None:
         """Preprocess Andalucía contentapi data to flat structure.

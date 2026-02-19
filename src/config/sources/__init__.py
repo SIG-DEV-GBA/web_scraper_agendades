@@ -7,7 +7,7 @@ Usage:
     from src.config.sources import SourceRegistry, SourceTier
 
     # Get a specific source
-    source = SourceRegistry.get("catalunya_agenda")
+    source = SourceRegistry.get("diba_barcelona")
 
     # Get all sources for a tier
     gold_sources = SourceRegistry.get_by_tier(SourceTier.GOLD)

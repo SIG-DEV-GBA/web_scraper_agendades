@@ -196,6 +196,9 @@ CONTENIDO A ANALIZAR:
 # Prompt optimizado para clasificación batch con múltiples categorías
 BATCH_CLASSIFICATION_PROMPT = """Eres un clasificador experto de eventos culturales en ESPAÑA. Analiza CADA evento en profundidad antes de asignar categorías.
 
+⚠️ IMPORTANTE - IDIOMA: Todos los campos de salida (summary, description, normalized_text) deben estar en ESPAÑOL.
+Si el evento viene en catalán, euskera u otro idioma → tradúcelo al español de forma NATURAL y fluida, no literal.
+
 CAMPOS DE CADA EVENTO:
 - id: identificador único
 - title: título del evento
@@ -369,6 +372,9 @@ REGLAS PARA SUMMARY:
 - Describe QUÉ ofrece el evento, para QUIÉN es, o por qué es interesante
 - Longitud ideal: 80-150 caracteres
 - Si no hay info suficiente, pon null
+- ⚠️ TRADUCCIÓN: Si el texto original está en catalán, tradúcelo al español de forma NATURAL y fluida.
+  No traduzcas literalmente - adapta expresiones para que suenen bien en castellano.
+  Ejemplo: "Endinsa't a la residència" → "Adéntrate en la residencia" (no "Adéntrate a la residencia")
 
 REGLAS PARA DESCRIPTION (MUY IMPORTANTE para fuentes SPA/web):
 - Si la descripción original tiene MENOS de 250 caracteres → GENERA una descripción más completa
@@ -376,6 +382,12 @@ REGLAS PARA DESCRIPTION (MUY IMPORTANTE para fuentes SPA/web):
 - La descripción generada debe tener 300-500 caracteres
 - Incluye: qué es el evento, qué se puede esperar, a quién va dirigido, por qué es interesante
 - Usa tono informativo y atractivo, sin ser demasiado promocional
+- ⚠️ TRADUCCIÓN CATALÁN→ESPAÑOL: Si el contenido está en catalán, SIEMPRE tradúcelo al español.
+  Traduce de forma NATURAL y fluida, no literal. Adapta expresiones catalanas al castellano coloquial.
+  Ejemplos de buena traducción:
+  - "Viatgem a l'estiu de 1924" → "Viajamos al verano de 1924"
+  - "Si escoltem bé, la criada ens revela secrets" → "Si prestamos atención, la criada nos revela secretos"
+  - "Un recorregut sensorial amb música" → "Un recorrido sensorial con música"
 - Ejemplo: "Este espectáculo teatral nos transporta a los años 80 a través de la historia de una mujer que lucha por salir adelante. La obra combina humor y drama en una puesta en escena que ha cosechado excelentes críticas. Ideal para amantes del teatro y quienes buscan una velada entretenida con reflexión sobre la época."
 
 REGLAS PARA PRICE_DETAILS (información de precios):
@@ -431,6 +443,7 @@ EJEMPLOS DE NORMALIZED_TEXT:
 - NO copiar el título literalmente ❌
 - SÍ describir el tipo de actividad ✓
 - SÍ añadir contexto semántico ✓
+- ⚠️ Si el título/descripción está en catalán → normalized_text SIEMPRE en español
 
 Responde SOLO con JSON válido (array de objetos):
 [

@@ -54,49 +54,8 @@ GOLD_SOURCES: list[GoldSourceConfig] = [
     # ============================================================
     # APIs Gold - Datos estructurados
     # ============================================================
-    GoldSourceConfig(
-        slug="catalunya_agenda",
-        name="Agenda Cultural de Catalunya",
-        url="https://analisi.transparenciacatalunya.cat/resource/rhpv-yr4f.json",
-        ccaa="Cataluña",
-        ccaa_code="CT",
-        tier=SourceTier.GOLD,
-        pagination_type=PaginationType.SOCRATA,
-        page_size=1000,
-        offset_param="$offset",
-        limit_param="$limit",
-        items_path="",
-        date_format="%Y-%m-%dT%H:%M:%S.%f",
-        free_value="Si",
-        free_field="gratuita",
-        image_url_prefix="https://agenda.cultura.gencat.cat",
-        field_mappings={
-            "codi": "external_id",
-            "denominaci": "title",
-            "descripcio": "description",
-            "data_inici": "start_date",
-            "data_fi": "end_date",
-            "horari": "time_info",
-            "gratuita": "is_free_text",
-            "entrades": "price_info",
-            "espai": "venue_name",
-            "adre_a": "address",
-            "codi_postal": "postal_code",
-            "localitat": "city",
-            "comarca_i_municipi": "comarca",
-            "latitud": "latitude",
-            "longitud": "longitude",
-            "tags_categor_es": "category_tags",
-            "imatges": "images",
-            "linkbotoentrades": "external_url",
-            "subt_tol": "summary",
-            "url": "organizer_url",
-            "email": "contact_email",
-            "tel_fon": "contact_phone",
-            "modalitat": "modality_text",
-            "destacada": "is_featured_text",
-        },
-    ),
+    # NOTE: catalunya_agenda (Socrata API) eliminado - reemplazado por diba_barcelona
+    # que tiene mejor cobertura y datos más completos para la provincia de Barcelona
     GoldSourceConfig(
         slug="euskadi_kulturklik",
         name="Kulturklik - Agenda Cultural Euskadi",
@@ -295,6 +254,46 @@ GOLD_SOURCES: list[GoldSourceConfig] = [
             "subEvent.0.location.telephone": "contact_phone",
             "subEvent.0.location.email": "contact_email",
             "category.0.title": "category_name_alt",
+        },
+    ),
+    GoldSourceConfig(
+        slug="diba_barcelona",
+        name="Diputació de Barcelona - Agenda Turística",
+        url="https://do.diba.cat/api/dataset/actesturisme_es/format/json",
+        ccaa="Cataluña",
+        ccaa_code="CT",
+        tier=SourceTier.GOLD,  # Uses custom adapter in gold/diba_barcelona.py
+        pagination_type=PaginationType.NONE,
+        items_path="elements",  # API returns {"elements": [...]}
+        default_province="Barcelona",
+        datetime_format="%Y-%m-%d %H:%M:%S",
+        # Field mappings - nota: grup_adreca es anidado, requiere adaptador custom
+        field_mappings={
+            # Identificación
+            "acte_id": "external_id",
+            "titol": "title",
+            # Descripción: descripcio=corto(summary), observacions=largo(description)
+            "descripcio": "summary",
+            "observacions": "description",
+            # Fechas
+            "data_inici": "start_date",
+            "data_fi": "end_date",
+            # Ubicación - grup_adreca es objeto anidado con:
+            # adreca_nom, adreca, codi_postal, municipi_nom, localitzacio
+            "grup_adreca": "_address_nested",  # Custom parsing in adapter
+            # Contacto
+            "telefon_contacte": "contact_phone_list",  # Es array
+            "email": "contact_email",
+            # Organizador
+            "acte_organitzadors": "organizer_name",
+            "url_general": "organizer_url",
+            # Precio y categoría
+            "preu": "price_info",
+            "tags": "category_tags",  # Es array de strings
+            # Enlaces
+            "acte_url": "external_url",
+            # Imágenes
+            "imatge": "image_url",
         },
     ),
 ]
