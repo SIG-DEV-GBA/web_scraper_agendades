@@ -1223,6 +1223,7 @@ class BronzeScraperAdapter(BaseAdapter):
             "canarias_grancanaria",
             "navarra_cultura",
             "asturias_turismo",
+            "canarias_lagenda",  # Firecrawl returns 500
         }
         if self.bronze_config.slug in direct_http_sources:
             use_firecrawl = False
