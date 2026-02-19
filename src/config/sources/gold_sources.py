@@ -31,16 +31,7 @@ GOLD_SOURCES: list[GoldSourceConfig] = [
         pagination_type=PaginationType.NONE,  # Handled by adapter
         default_province="Navarra",
     ),
-    GoldSourceConfig(
-        slug="larioja_agenda",
-        name="Agenda La Rioja - LARIOJA.COM",
-        url="https://agenda.larioja.com/",
-        ccaa="La Rioja",
-        ccaa_code="RI",
-        tier=SourceTier.GOLD,  # Uses registered adapter
-        pagination_type=PaginationType.NONE,  # Handled by adapter
-        default_province="La Rioja",
-    ),
+    # larioja_agenda - usa adapter custom en bronze/larioja_agenda.py
     GoldSourceConfig(
         slug="pamplona",
         name="Ayuntamiento de Pamplona - Agenda de Eventos",

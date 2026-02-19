@@ -454,28 +454,7 @@ BRONZE_SOURCES: dict[str, BronzeSourceConfig] = {
         detail_description_selector='[itemprop="description"], .text[itemprop="description"], div.text',
     ),
     # ---- LA RIOJA ----
-    "larioja_agenda": BronzeSourceConfig(
-        slug="larioja_agenda",
-        name="Agenda de La Rioja - LARIOJA.COM",
-        listing_url="https://agenda.larioja.com/",
-        ccaa="La Rioja",
-        ccaa_code="RI",
-        province="La Rioja",  # La Rioja is uniprovincial
-        base_url="https://agenda.larioja.com",
-        # Selectors for agenda.larioja.com (Vocento CMS)
-        # Featured events use .voc-agenda-titulo, others use .voc-agenda-titulo2
-        event_card_selector="article",
-        title_selector=".voc-agenda-titulo a, .voc-agenda-titulo2 a",
-        link_selector=".voc-agenda-titulo a, .voc-agenda-titulo2 a",
-        image_selector="img.figure-img",
-        location_selector=".voc-agenda-localidad",
-        # No pagination - single page with all events
-        max_pages=1,
-        # Detail page - URLs like /evento/slug-123456.html, uses JSON-LD for data
-        detail_url_pattern="https://agenda.larioja.com{id}",
-        detail_id_extractor="url_suffix",
-        detail_description_selector=".voc-evento-descripcion, .evento-body",
-    ),
+    # larioja_agenda - usa adapter custom en bronze/larioja_agenda.py
     # ---- EXTREMADURA (Badajoz) ----
     "badajoz_agenda": BronzeSourceConfig(
         slug="badajoz_agenda",
@@ -1244,7 +1223,6 @@ class BronzeScraperAdapter(BaseAdapter):
             "canarias_grancanaria",
             "navarra_cultura",
             "asturias_turismo",
-            "larioja_agenda",
         }
         if self.bronze_config.slug in direct_http_sources:
             use_firecrawl = False
