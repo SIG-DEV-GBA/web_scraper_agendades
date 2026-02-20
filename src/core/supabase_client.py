@@ -16,6 +16,48 @@ logger = get_logger(__name__)
 # Calendar IDs - Events are linked to multiple calendars hierarchically
 PUBLIC_CALENDAR_ID = "00000000-0000-0000-0000-000000000001"
 
+# Official CCAA names from INE API (https://ccaa-provincias-municipios-localida.vercel.app/api/comunidades)
+# Map aliases to official names for consistency in event_locations table
+CCAA_OFFICIAL_NAMES = {
+    # Official names map to themselves
+    "andalucía": "Andalucía",
+    "aragón": "Aragón",
+    "canarias": "Canarias",
+    "cantabria": "Cantabria",
+    "castilla y león": "Castilla y León",
+    "castilla-la mancha": "Castilla-La Mancha",
+    "cataluña": "Cataluña",
+    "ceuta": "Ceuta",
+    "comunidad de madrid": "Comunidad de Madrid",
+    "comunidad valenciana": "Comunidad Valenciana",
+    "extremadura": "Extremadura",
+    "galicia": "Galicia",
+    "islas baleares": "Islas Baleares",
+    "la rioja": "La Rioja",
+    "melilla": "Melilla",
+    "navarra": "Navarra",
+    "país vasco": "País Vasco",
+    "principado de asturias": "Principado de Asturias",
+    "región de murcia": "Región de Murcia",
+    # Aliases -> official names
+    "asturias": "Principado de Asturias",
+    "madrid": "Comunidad de Madrid",
+    "murcia": "Región de Murcia",
+    "valencia": "Comunidad Valenciana",
+    "euskadi": "País Vasco",
+    "catalunya": "Cataluña",
+    "illes balears": "Islas Baleares",
+    "comunidad foral de navarra": "Navarra",
+}
+
+
+def normalize_ccaa(ccaa: str | None) -> str | None:
+    """Normalize CCAA name to official INE format."""
+    if not ccaa:
+        return None
+    return CCAA_OFFICIAL_NAMES.get(ccaa.lower().strip(), ccaa)
+
+
 # CCAA Calendar mapping (comunidad_autonoma name -> calendar_id)
 # Includes official names and common aliases
 CCAA_CALENDARS = {
@@ -231,7 +273,7 @@ class SupabaseClient:
                 "city": event.city or "",
                 "municipio": event.district or event.city or "",
                 "province": event.province or "",
-                "comunidad_autonoma": final_ccaa,
+                "comunidad_autonoma": normalize_ccaa(final_ccaa),  # Normalize to official INE name
                 "country": event.country or "España",
                 "postal_code": event.postal_code or "",
             }
