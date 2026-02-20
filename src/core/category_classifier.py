@@ -151,18 +151,20 @@ class CategoryClassifier:
         self,
         confidence_threshold: float = 0.50,
         fallback_threshold: float = 0.48,
-        max_categories: int = 2,
+        max_categories: int = 1,  # Changed: only 1 category per event
     ) -> None:
         """Initialize classifier.
 
         Args:
             confidence_threshold: Minimum similarity to assign category with confidence
             fallback_threshold: If best match is below this, use default category
-            max_categories: Maximum categories to assign per event
+            max_categories: Maximum categories to assign per event (default: 1)
         """
         self.confidence_threshold = confidence_threshold
         self.fallback_threshold = fallback_threshold
         self.max_categories = max_categories
+        # Only these categories are allowed (others map to cultural)
+        self.allowed_categories = {"tecnologia", "sanitaria", "cultural"}
         self._embeddings_client: EmbeddingsClient | None = None
         self._category_embeddings: dict[str, list[float]] | None = None
 
@@ -252,33 +254,27 @@ class CategoryClassifier:
         # Sort by similarity (descending)
         sorted_categories = sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
-        # Select categories above threshold
+        # Simplified logic: only allow tecnologia, sanitaria, or cultural
+        # Check if tecnologia or sanitaria is above threshold
         selected = []
-        for slug, score in sorted_categories:
-            if score >= self.confidence_threshold and len(selected) < self.max_categories:
-                selected.append(slug)
+        for slug in ["tecnologia", "sanitaria"]:
+            if slug in scores and scores[slug] >= self.confidence_threshold:
+                selected = [slug]
+                logger.info(
+                    "category_special_detected",
+                    category=slug,
+                    score=scores[slug],
+                )
+                break
 
-        # If nothing above confidence threshold, use best match or default
-        if not selected and sorted_categories:
-            best_slug, best_score = sorted_categories[0]
-            # If best match is above fallback threshold, use it
-            if best_score >= self.fallback_threshold:
-                selected = [best_slug]
-                logger.info(
-                    "category_best_match",
-                    category=best_slug,
-                    score=best_score,
-                    threshold=self.confidence_threshold,
-                )
-            else:
-                # Very low confidence, use default (cultural)
-                selected = [DEFAULT_CATEGORY]
-                logger.info(
-                    "category_fallback_to_default",
-                    default=DEFAULT_CATEGORY,
-                    best_match=(best_slug, best_score),
-                    fallback_threshold=self.fallback_threshold,
-                )
+        # If no special category detected, default to cultural
+        if not selected:
+            selected = [DEFAULT_CATEGORY]
+            best_slug, best_score = sorted_categories[0] if sorted_categories else ("", 0)
+            logger.debug(
+                "category_default_cultural",
+                original_best=(best_slug, best_score),
+            )
 
         logger.debug(
             "classification_complete",
