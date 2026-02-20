@@ -338,6 +338,15 @@ MADRID_ACCESSIBILITY_CODES = {
     "9": {"field": "other_facilities", "desc": "Audiodescripción"},
 }
 
+# Madrid districts for fallback location extraction from titles
+MADRID_DISTRICTS = [
+    "Arganzuela", "Barajas", "Carabanchel", "Centro", "Chamartín", "Chamberí",
+    "Ciudad Lineal", "Fuencarral-El Pardo", "Fuencarral", "Hortaleza", "Latina",
+    "Moncloa-Aravaca", "Moncloa", "Moratalaz", "Puente de Vallecas", "Retiro",
+    "Salamanca", "San Blas-Canillejas", "San Blas", "Tetuán", "Usera",
+    "Vicálvaro", "Villa de Vallecas", "Villaverde",
+]
+
 
 def get_nested_value(data: dict, path: str) -> Any:
     """Get value from nested dict using dot notation."""
@@ -770,6 +779,20 @@ class GoldAPIAdapter(BaseAdapter):
             if district_uri and "/Distrito/" in district_uri:
                 # URI format: .../Distrito/Moncloa-Aravaca
                 district = district_uri.split("/Distrito/")[-1].replace("-", " ")
+
+            # Madrid fallback: if no location data, try to extract district from title
+            # and default to "Madrid" as city
+            if self.source_id == "madrid_datos_abiertos":
+                has_location = any([venue_name, address, city, latitude, longitude])
+                if not has_location:
+                    # Try to extract district from title
+                    title_district = self._extract_district_from_title(title)
+                    if title_district:
+                        district = title_district
+                        venue_name = f"Distrito {title_district}"
+                    # Always default to Madrid city for Madrid source
+                    city = "Madrid"
+                    province = "Madrid"
 
             # Price - always provide descriptive text for UI
             price_info_raw = get_mapped("price_info")
@@ -1303,6 +1326,23 @@ class GoldAPIAdapter(BaseAdapter):
                 return first.get("province")
             return str(first)
 
+        return None
+
+    def _extract_district_from_title(self, title: str) -> str | None:
+        """Extract Madrid district from event title.
+
+        Many Madrid events include the district in the title like:
+        - "Concierto - Villaverde"
+        - "Actividades en Centro Cultural Latina"
+        - "Carnaval en Barajas"
+        """
+        if not title:
+            return None
+
+        title_lower = title.lower()
+        for district in MADRID_DISTRICTS:
+            if district.lower() in title_lower:
+                return district
         return None
 
     def _extract_category(self, raw_data: dict) -> str | None:
