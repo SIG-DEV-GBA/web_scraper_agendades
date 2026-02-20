@@ -266,12 +266,22 @@ class SupabaseClient:
                     )
                     final_ccaa = detected_ccaa
 
+            # Determine municipio: for Madrid city, use "Madrid" not district
+            # Districts are subdivisions of the Madrid municipality
+            municipio = event.city or ""
+            city_lower = (event.city or "").lower().strip()
+            if city_lower == "madrid" or city_lower == "madrid capital":
+                municipio = "Madrid"
+            elif event.district and event.district != event.city:
+                # For other cities, district might be a different municipio
+                municipio = event.district
+
             data = {
                 "event_id": event_id,
                 "name": event.venue_name or "",
                 "address": event.address or "",
                 "city": event.city or "",
-                "municipio": event.district or event.city or "",
+                "municipio": municipio,
                 "province": event.province or "",
                 "comunidad_autonoma": normalize_ccaa(final_ccaa),  # Normalize to official INE name
                 "country": event.country or "España",
