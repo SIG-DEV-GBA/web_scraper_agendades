@@ -225,13 +225,14 @@ class VacacionesSeniorsAdapter(BaseAdapter):
                 if use_firecrawl and consecutive_failures < 3:
                     result = await firecrawl.scrape(
                         detail_url,
-                        formats=["markdown"],
-                        wait_for=".et_pb_toggle",
-                        timeout=30000,
+                        formats=["html"],  # HTML faster than markdown
+                        timeout=20000,  # Reduced timeout
+                        # Removed wait_for - was causing 500 errors
                     )
 
-                    if result.success and result.markdown:
-                        details = self._parse_detail_page(result.markdown, detail_url)
+                    if result.success and (result.html or result.markdown):
+                        content = result.html or result.markdown
+                        details = self._parse_detail_page(content, detail_url)
                         event.update(details)
                         success = True
                         consecutive_failures = 0
