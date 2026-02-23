@@ -214,20 +214,26 @@ class VacacionesSeniorsAdapter(BaseAdapter):
                 continue
 
             try:
-                # Anti-blocking delay between requests (random 2-5 seconds)
+                # Anti-blocking delay between requests (random 5-10 seconds)
                 if i > 0:
-                    delay = random.uniform(2, 5)
+                    delay = random.uniform(5, 10)
                     await asyncio.sleep(delay)
 
                 success = False
 
                 # Use Firecrawl if enabled and not failing
                 if use_firecrawl and consecutive_failures < 3:
+                    # Custom headers to look like real browser
+                    custom_headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Referer": "https://vacacionesseniors.com/circuitos-culturales-salidas-desde-madrid/",
+                        "Accept-Language": "es-ES,es;q=0.9",
+                    }
                     result = await firecrawl.scrape(
                         detail_url,
                         formats=["html"],  # HTML faster than markdown
                         timeout=20000,  # Reduced timeout
-                        # Removed wait_for - was causing 500 errors
+                        headers=custom_headers,
                     )
 
                     if result.success and (result.html or result.markdown):
