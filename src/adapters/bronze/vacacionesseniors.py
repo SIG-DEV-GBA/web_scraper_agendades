@@ -195,100 +195,86 @@ class VacacionesSeniorsAdapter(BaseAdapter):
         return parts[-1] if parts else "unknown"
 
     async def _fetch_details(self, events: list[dict[str, Any]]) -> None:
-        """Fetch detail pages using Firecrawl to get JS-rendered content.
+        """Fetch detail pages with optimized concurrency and adaptive delays.
 
-        Uses anti-blocking patterns:
-        - Random delays between requests (2-5 seconds)
-        - Longer backoff on 500 errors (10-20 seconds)
-        - Skip Firecrawl after consecutive failures
+        Strategy:
+        - Semaphore limits concurrent requests (avoid overwhelming server)
+        - Adaptive delays: short (1-2s) on success, longer (3-5s) on failure
+        - Firecrawl first, fallback to direct HTTP on failure
+        - Progress logging every request
         """
         firecrawl_url = os.getenv("FIRECRAWL_URL", "https://firecrawl.si-erp.cloud")
         firecrawl = get_firecrawl_client(base_url=firecrawl_url)
 
-        consecutive_failures = 0
-        use_firecrawl = True  # Disable if too many failures
+        # Concurrency control: max 2 parallel requests
+        semaphore = asyncio.Semaphore(2)
 
-        for i, event in enumerate(events):
+        # Shared state for adaptive behavior
+        stats = {"success": 0, "fallback": 0, "errors": 0}
+        base_delay = 1.5  # Base delay between requests
+
+        async def fetch_single(idx: int, event: dict) -> None:
+            """Fetch single detail page with rate limiting."""
             detail_url = event.get("detail_url")
             if not detail_url:
-                continue
+                return
 
-            try:
-                # Anti-blocking delay between requests (random 3-5 seconds)
-                if i > 0:
-                    delay = random.uniform(3, 5)
+            async with semaphore:
+                # Adaptive delay based on recent success rate
+                if idx > 0:
+                    # More failures = longer delay
+                    failure_rate = stats["fallback"] / max(1, stats["success"] + stats["fallback"])
+                    delay = base_delay + (failure_rate * 3)  # 1.5s to 4.5s
                     await asyncio.sleep(delay)
 
-                success = False
-                self.logger.debug("fetching_detail", index=i + 1, total=len(events), url=detail_url[-40:])
+                try:
+                    success = False
+                    self.logger.info(
+                        "fetching",
+                        idx=f"{idx + 1}/{len(events)}",
+                        url=detail_url.split("/")[-2] if "/" in detail_url else detail_url[-30:],
+                    )
 
-                # Use Firecrawl if enabled and not failing
-                if use_firecrawl and consecutive_failures < 3:
-                    # Custom headers to look like real browser
-                    custom_headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "Referer": "https://vacacionesseniors.com/circuitos-culturales-salidas-desde-madrid/",
-                        "Accept-Language": "es-ES,es;q=0.9",
-                    }
+                    # Try Firecrawl first
                     result = await firecrawl.scrape(
                         detail_url,
-                        formats=["html"],  # HTML faster than markdown
-                        timeout=20000,  # Reduced timeout
-                        headers=custom_headers,
+                        formats=["html"],
+                        timeout=15000,  # 15s timeout
                     )
 
                     if result.success and (result.html or result.markdown):
                         content = result.html or result.markdown
                         details = self._parse_detail_page(content, detail_url)
                         event.update(details)
+                        stats["success"] += 1
                         success = True
-                        consecutive_failures = 0
                     else:
-                        consecutive_failures += 1
-                        self.logger.debug(
-                            "firecrawl_fallback",
-                            url=detail_url,
-                            error=result.error,
-                            consecutive_failures=consecutive_failures,
-                        )
-                        # Longer backoff on failure (10-20 seconds)
-                        if consecutive_failures >= 2:
-                            backoff = random.uniform(10, 20)
-                            self.logger.warning(
-                                "firecrawl_backoff",
-                                backoff_seconds=round(backoff, 1),
-                                failures=consecutive_failures,
-                            )
-                            await asyncio.sleep(backoff)
+                        stats["fallback"] += 1
+                        self.logger.debug("firecrawl_fail", error=result.error[:50] if result.error else "no_content")
 
-                        if consecutive_failures >= 3:
-                            self.logger.warning(
-                                "firecrawl_disabled",
-                                reason="too_many_failures",
-                                switching_to="direct_http",
-                            )
-                            use_firecrawl = False
+                    # Fallback to direct HTTP
+                    if not success:
+                        response = await self.fetch_url(detail_url)
+                        details = self._parse_detail_page(response.text, detail_url)
+                        event.update(details)
 
-                # Fallback to direct HTTP
-                if not success:
-                    response = await self.fetch_url(detail_url)
-                    details = self._parse_detail_page(response.text, detail_url)
-                    event.update(details)
+                except Exception as e:
+                    stats["errors"] += 1
+                    self.logger.warning("fetch_error", idx=idx + 1, error=str(e)[:50])
 
-                if (i + 1) % 5 == 0:
-                    self.logger.info("detail_fetch_progress", fetched=i + 1, total=len(events))
-
-            except Exception as e:
-                self.logger.warning("detail_fetch_error", url=detail_url, error=str(e))
-                # Extra delay after error
-                await asyncio.sleep(random.uniform(5, 10))
+        # Process all events with controlled concurrency
+        tasks = [fetch_single(i, event) for i, event in enumerate(events)]
+        await asyncio.gather(*tasks)
 
         await firecrawl.close()
 
         self.logger.info(
             "detail_fetch_complete",
-            with_dates=sum(1 for e in events if e.get("start_date")),
             total=len(events),
+            firecrawl_ok=stats["success"],
+            http_fallback=stats["fallback"],
+            errors=stats["errors"],
+            with_dates=sum(1 for e in events if e.get("start_date")),
         )
 
     def _parse_detail_page(self, html: str, url: str) -> dict[str, Any]:
