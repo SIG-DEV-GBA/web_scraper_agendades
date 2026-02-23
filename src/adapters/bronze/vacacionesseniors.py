@@ -295,37 +295,31 @@ class VacacionesSeniorsAdapter(BaseAdapter):
         if og_image and og_image.get("content"):
             details["image_url"] = og_image["content"]
 
-        # Description from first paragraphs (before accordions)
-        desc_parts = []
-
-        # Try CSS selector first (for raw HTML)
+        # Description: intro paragraph (outside accordions)
+        intro_text = None
         main_content = soup.select_one(".et_pb_section")
         if main_content:
-            for p in main_content.find_all("p", limit=5):
+            for p in main_content.find_all("p"):
+                # Skip paragraphs inside accordions
+                if p.find_parent(class_="et_pb_toggle"):
+                    continue
                 text = p.get_text(strip=True)
-                if text and len(text) > 30 and "Vacaciones Seniors" not in text:
-                    desc_parts.append(text)
+                if text and len(text) > 50 and "Vacaciones Seniors" not in text:
+                    intro_text = text
+                    break
 
-        # Fallback: extract from full text (for Firecrawl HTML/markdown)
-        if not desc_parts:
+        # Fallback for Firecrawl: extract intro from full text
+        if not intro_text:
             full_text = soup.get_text(" ", strip=True)
-            # Look for description after header info, before accordions
-            import re
-            # Pattern: after "España Circuito Opcional" and before "Información" or "Precios"
             desc_match = re.search(
-                r'(?:España|Circuito|Opcional)[^A-Z]{0,50}([A-ZÁÉÍÓÚ][^€]{100,600}?)(?:Información|Precios|Itinerario|Día\s+1)',
+                r'(?:España|Circuito|Opcional)[^A-Z]{0,50}([A-ZÁÉÍÓÚ][^€]{50,800}?)(?:Información|Precios|Duración)',
                 full_text,
                 re.DOTALL
             )
             if desc_match:
-                desc_text = desc_match.group(1).strip()
-                # Clean up whitespace
-                desc_text = re.sub(r'\s+', ' ', desc_text)
-                if len(desc_text) > 50:
-                    desc_parts.append(desc_text)
+                intro_text = re.sub(r'\s+', ' ', desc_match.group(1).strip())
 
-        if desc_parts:
-            details["description"] = "\n\n".join(desc_parts[:2])
+        details["intro"] = intro_text
 
         # Parse accordions
         accordions = soup.select(".et_pb_toggle")
@@ -348,8 +342,8 @@ class VacacionesSeniorsAdapter(BaseAdapter):
                 self._parse_price_accordion(content_text, details)
 
             elif "itinerario" in acc_title:
-                # Extract itinerary summary
-                itinerary = self._parse_itinerary(content_text)
+                # Extract full itinerary (day by day)
+                itinerary = self._parse_full_itinerary(content_elem)
                 if itinerary:
                     details["itinerary"] = itinerary
 
@@ -443,11 +437,9 @@ class VacacionesSeniorsAdapter(BaseAdapter):
                 details["price_info"] = f"{price}€ por persona"
 
     def _parse_itinerary(self, text: str) -> str | None:
-        """Extract a summary of the itinerary."""
-        # Look for "Día X •" patterns
+        """Extract a summary of the itinerary (legacy - not used)."""
         days = re.findall(r"Día\s+\d+\s*[•·]\s*([^D]+?)(?=Día\s+\d+|$)", text, re.IGNORECASE)
         if days:
-            # Get first and last day summaries
             summary_parts = []
             if len(days) >= 1:
                 summary_parts.append(f"Día 1: {days[0].strip()[:100]}")
@@ -455,6 +447,58 @@ class VacacionesSeniorsAdapter(BaseAdapter):
                 summary_parts.append(f"... ({len(days)} días)")
             return " ".join(summary_parts)
         return None
+
+    def _parse_full_itinerary(self, content_elem: BeautifulSoup) -> list[dict] | None:
+        """Extract full day-by-day itinerary from accordion content.
+
+        Returns list of dicts: [{"day": 1, "title": "Madrid / Asturias", "text": "..."}]
+        """
+        if not content_elem:
+            return None
+
+        text = content_elem.get_text(" ", strip=True)
+
+        # Pattern: "Día N • Title Description" - use D.a to handle encoding (Día/Dìa/D�a)
+        day_pattern = r"D.a\s+(\d+)\s*[•·–-]\s*(.+?)(?=D.a\s+\d+\s*[•·–-]|$)"
+        matches = re.findall(day_pattern, text, re.IGNORECASE | re.DOTALL)
+
+        if not matches:
+            return None
+
+        days = []
+        for day_num, content in matches:
+            content = content.strip()
+
+            # Title is "Ciudad / Ciudad" or "Ciudad de Origen / Destino" format
+            # Look for pattern ending with common keywords that start description
+            title_match = re.match(
+                r"^(.+?)(?=\s+(?:Salida|Desayuno|Llegada|Por la|Almuerzo|Cena|Visita|Tiempo|Ma.ana|Estancia|R.gimen|Jornada))",
+                content,
+                re.IGNORECASE
+            )
+            if title_match:
+                title = title_match.group(1).strip()
+                desc = content[len(title):].strip()
+            else:
+                # Fallback: split at first sentence
+                first_sentence = re.match(r"^([^.]{10,80}\.)", content)
+                if first_sentence:
+                    title = first_sentence.group(1).rstrip(".")
+                    desc = content[len(first_sentence.group(1)):].strip()
+                else:
+                    title = content[:50].strip()
+                    desc = content[50:].strip() if len(content) > 50 else ""
+
+            # Clean
+            desc = re.sub(r"\s+", " ", desc).strip()
+
+            days.append({
+                "day": int(day_num),
+                "title": title,
+                "text": desc[:400] if desc else None
+            })
+
+        return days if days else None
 
     def _parse_all_dates(self, text: str) -> list[date]:
         """Parse all departure dates from text."""
@@ -534,80 +578,51 @@ class VacacionesSeniorsAdapter(BaseAdapter):
     def _build_markdown_description(
         self, raw_data: dict[str, Any], duration: int, city: str | None
     ) -> str | None:
-        """Build a Markdown-formatted description for the event.
+        """Build a clean, readable description with intro + itinerary.
 
-        Output format:
-        ```
-        Descripción del viaje aquí...
+        Format:
+        - Intro paragraph (what the trip is about)
+        - Day-by-day itinerary with bold day headers
 
-        ## 📍 Destino
-        **Galicia** - Circuito de 6 días
-
-        ## 📅 Fechas de salida
-        - 8 de Marzo (305€)
-        - 22 de Marzo (305€)
-        - 5 de Abril (325€)
-
-        ## 🗺️ Itinerario
-        **Día 1:** Salida desde Madrid...
-        ```
+        Does NOT duplicate: dates, prices, city (already in event fields)
         """
         parts = []
 
-        # Main description (cleaned)
-        if raw_data.get("description"):
-            desc = raw_data["description"].strip()
-            # Remove excessive whitespace
-            desc = re.sub(r'\n{3,}', '\n\n', desc)
-            parts.append(desc)
+        # Intro paragraph
+        intro = raw_data.get("intro", "").strip()
+        if intro:
+            parts.append(intro)
 
-        # Destination & Duration section
-        dest_info = []
-        if city and city != "Varios destinos":
-            dest_info.append(f"**{city}**")
-        if duration > 1:
-            nights = duration - 1
-            dest_info.append(f"Circuito de {duration} días / {nights} noches")
+        # Itinerary (day by day)
+        itinerary = raw_data.get("itinerary")
+        if itinerary and isinstance(itinerary, list):
+            itinerary_parts = []
+            for day in itinerary:
+                day_num = day.get("day", "?")
+                title = day.get("title", "")
+                text = day.get("text", "")
 
-        if dest_info:
-            parts.append(f"\n## 📍 Destino\n{' - '.join(dest_info)}")
+                # Format: **Día 1 - Madrid / Asturias**
+                header = f"**Día {day_num}**"
+                if title:
+                    header += f" - *{title}*"
 
-        # Departure dates with prices
-        all_dates = raw_data.get("all_dates", [])
-        date_prices = raw_data.get("date_prices", {})
-        base_price = raw_data.get("price")
-
-        if all_dates:
-            dates_md = []
-            # Format up to 6 dates, then show "+X más"
-            for i, d in enumerate(all_dates[:6]):
-                price = date_prices.get(d, base_price)
-                # Format: "8 de Marzo" (cross-platform)
-                month_names = {
-                    1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
-                    5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
-                    9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
-                }
-                date_str = f"{d.day} de {month_names[d.month]}"
-                if price:
-                    dates_md.append(f"- {date_str} ({price}€)")
+                if text:
+                    itinerary_parts.append(f"{header}\n{text}")
                 else:
-                    dates_md.append(f"- {date_str}")
+                    itinerary_parts.append(header)
 
-            if len(all_dates) > 6:
-                dates_md.append(f"- *...y {len(all_dates) - 6} fechas más*")
+            if itinerary_parts:
+                parts.append("\n\n".join(itinerary_parts))
 
-            parts.append(f"\n## 📅 Fechas de salida\n" + "\n".join(dates_md))
-
-        # Itinerary
-        if raw_data.get("itinerary"):
-            parts.append(f"\n## 🗺️ Itinerario\n{raw_data['itinerary']}")
-
-        # Return None if no content
         if not parts:
+            # Fallback to old description field
+            desc = raw_data.get("description", "").strip()
+            if desc:
+                return desc
             return None
 
-        return "\n".join(parts)
+        return "\n\n".join(parts)
 
     def parse_event(self, raw_data: dict[str, Any]) -> EventCreate | None:
         """Parse raw event data into EventCreate model."""
