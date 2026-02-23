@@ -531,6 +531,84 @@ class VacacionesSeniorsAdapter(BaseAdapter):
 
         return None, None
 
+    def _build_markdown_description(
+        self, raw_data: dict[str, Any], duration: int, city: str | None
+    ) -> str | None:
+        """Build a Markdown-formatted description for the event.
+
+        Output format:
+        ```
+        Descripción del viaje aquí...
+
+        ## 📍 Destino
+        **Galicia** - Circuito de 6 días
+
+        ## 📅 Fechas de salida
+        - 8 de Marzo (305€)
+        - 22 de Marzo (305€)
+        - 5 de Abril (325€)
+
+        ## 🗺️ Itinerario
+        **Día 1:** Salida desde Madrid...
+        ```
+        """
+        parts = []
+
+        # Main description (cleaned)
+        if raw_data.get("description"):
+            desc = raw_data["description"].strip()
+            # Remove excessive whitespace
+            desc = re.sub(r'\n{3,}', '\n\n', desc)
+            parts.append(desc)
+
+        # Destination & Duration section
+        dest_info = []
+        if city and city != "Varios destinos":
+            dest_info.append(f"**{city}**")
+        if duration > 1:
+            nights = duration - 1
+            dest_info.append(f"Circuito de {duration} días / {nights} noches")
+
+        if dest_info:
+            parts.append(f"\n## 📍 Destino\n{' - '.join(dest_info)}")
+
+        # Departure dates with prices
+        all_dates = raw_data.get("all_dates", [])
+        date_prices = raw_data.get("date_prices", {})
+        base_price = raw_data.get("price")
+
+        if all_dates:
+            dates_md = []
+            # Format up to 6 dates, then show "+X más"
+            for i, d in enumerate(all_dates[:6]):
+                price = date_prices.get(d, base_price)
+                # Format: "8 de Marzo" (cross-platform)
+                month_names = {
+                    1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+                    5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+                    9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+                }
+                date_str = f"{d.day} de {month_names[d.month]}"
+                if price:
+                    dates_md.append(f"- {date_str} ({price}€)")
+                else:
+                    dates_md.append(f"- {date_str}")
+
+            if len(all_dates) > 6:
+                dates_md.append(f"- *...y {len(all_dates) - 6} fechas más*")
+
+            parts.append(f"\n## 📅 Fechas de salida\n" + "\n".join(dates_md))
+
+        # Itinerary
+        if raw_data.get("itinerary"):
+            parts.append(f"\n## 🗺️ Itinerario\n{raw_data['itinerary']}")
+
+        # Return None if no content
+        if not parts:
+            return None
+
+        return "\n".join(parts)
+
     def parse_event(self, raw_data: dict[str, Any]) -> EventCreate | None:
         """Parse raw event data into EventCreate model."""
         try:
@@ -571,14 +649,8 @@ class VacacionesSeniorsAdapter(BaseAdapter):
             detail_url = raw_data.get("detail_url", "")
             city, province = self._extract_destination(title, detail_url)
 
-            # Build description
-            description_parts = []
-            if raw_data.get("description"):
-                description_parts.append(raw_data["description"])
-            if raw_data.get("itinerary"):
-                description_parts.append(f"\nItinerario: {raw_data['itinerary']}")
-
-            description = "\n".join(description_parts) if description_parts else None
+            # Build Markdown description
+            description = self._build_markdown_description(raw_data, duration, city)
 
             # Price info
             price = raw_data.get("price")
