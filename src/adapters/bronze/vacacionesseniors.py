@@ -536,44 +536,82 @@ class VacacionesSeniorsAdapter(BaseAdapter):
 
         return sorted(set(dates))
 
+    # Mapping of destinations to (city, province, ccaa)
+    DESTINATIONS = {
+        # CCAA level
+        "galicia": ("Galicia", "Pontevedra", "Galicia"),
+        "asturias": ("Oviedo", "Asturias", "Principado de Asturias"),
+        "cantabria": ("Santander", "Cantabria", "Cantabria"),
+        "andalucia": ("Sevilla", "Sevilla", "Andalucía"),
+        "extremadura": ("Cáceres", "Cáceres", "Extremadura"),
+        "castilla": ("Burgos", "Burgos", "Castilla y León"),
+        "aragon": ("Zaragoza", "Zaragoza", "Aragón"),
+        "navarra": ("Pamplona", "Navarra", "Comunidad Foral de Navarra"),
+        "rioja": ("Logroño", "La Rioja", "La Rioja"),
+        "pais vasco": ("Bilbao", "Bizkaia", "País Vasco"),
+        "euskadi": ("Bilbao", "Bizkaia", "País Vasco"),
+        "valencia": ("Valencia", "Valencia", "Comunitat Valenciana"),
+        "murcia": ("Murcia", "Murcia", "Región de Murcia"),
+        # Provincias Andalucía
+        "almeria": ("Almería", "Almería", "Andalucía"),
+        "cadiz": ("Cádiz", "Cádiz", "Andalucía"),
+        "malaga": ("Málaga", "Málaga", "Andalucía"),
+        "cordoba": ("Córdoba", "Córdoba", "Andalucía"),
+        "sevilla": ("Sevilla", "Sevilla", "Andalucía"),
+        "granada": ("Granada", "Granada", "Andalucía"),
+        "huelva": ("Huelva", "Huelva", "Andalucía"),
+        "jaen": ("Jaén", "Jaén", "Andalucía"),
+        # Ciudades Andalucía
+        "barbate": ("Barbate", "Cádiz", "Andalucía"),
+        "jerez": ("Jerez de la Frontera", "Cádiz", "Andalucía"),
+        "ronda": ("Ronda", "Málaga", "Andalucía"),
+        "marbella": ("Marbella", "Málaga", "Andalucía"),
+        "tarifa": ("Tarifa", "Cádiz", "Andalucía"),
+        # Castilla y León
+        "leon": ("León", "León", "Castilla y León"),
+        "burgos": ("Burgos", "Burgos", "Castilla y León"),
+        "segovia": ("Segovia", "Segovia", "Castilla y León"),
+        "avila": ("Ávila", "Ávila", "Castilla y León"),
+        "salamanca": ("Salamanca", "Salamanca", "Castilla y León"),
+        "valladolid": ("Valladolid", "Valladolid", "Castilla y León"),
+        "zamora": ("Zamora", "Zamora", "Castilla y León"),
+        "palencia": ("Palencia", "Palencia", "Castilla y León"),
+        "soria": ("Soria", "Soria", "Castilla y León"),
+        # Extremadura
+        "caceres": ("Cáceres", "Cáceres", "Extremadura"),
+        "badajoz": ("Badajoz", "Badajoz", "Extremadura"),
+        "merida": ("Mérida", "Badajoz", "Extremadura"),
+        # Otros
+        "teruel": ("Teruel", "Teruel", "Aragón"),
+        "huesca": ("Huesca", "Huesca", "Aragón"),
+        "cuenca": ("Cuenca", "Cuenca", "Castilla-La Mancha"),
+        "toledo": ("Toledo", "Toledo", "Castilla-La Mancha"),
+        "albacete": ("Albacete", "Albacete", "Castilla-La Mancha"),
+    }
+
     def _extract_destination(self, title: str, url: str) -> tuple[str | None, str | None]:
         """Extract destination city and province from title/URL."""
-        # Common destination patterns
-        destinations = {
-            "galicia": ("Galicia", "Pontevedra"),
-            "asturias": ("Asturias", "Asturias"),
-            "cantabria": ("Cantabria", "Cantabria"),
-            "andalucia": ("Andalucía", "Sevilla"),
-            "extremadura": ("Extremadura", "Cáceres"),
-            "castilla": ("Castilla", "Burgos"),
-            "aragon": ("Aragón", "Zaragoza"),
-            "navarra": ("Navarra", "Navarra"),
-            "rioja": ("La Rioja", "La Rioja"),
-            "pais vasco": ("País Vasco", "Bizkaia"),
-            "euskadi": ("País Vasco", "Bizkaia"),
-            "valencia": ("Valencia", "Valencia"),
-            "murcia": ("Murcia", "Murcia"),
-            "almeria": ("Almería", "Almería"),
-            "cadiz": ("Cádiz", "Cádiz"),
-            "malaga": ("Málaga", "Málaga"),
-            "cordoba": ("Córdoba", "Córdoba"),
-            "sevilla": ("Sevilla", "Sevilla"),
-            "granada": ("Granada", "Granada"),
-            "leon": ("León", "León"),
-            "burgos": ("Burgos", "Burgos"),
-            "segovia": ("Segovia", "Segovia"),
-            "avila": ("Ávila", "Ávila"),
-            "salamanca": ("Salamanca", "Salamanca"),
-        }
-
         title_lower = title.lower()
         url_lower = url.lower()
 
-        for key, (city, province) in destinations.items():
+        for key, (city, province, _) in self.DESTINATIONS.items():
             if key in title_lower or key in url_lower:
                 return city, province
 
         return None, None
+
+    def _get_ccaa_from_destination(self, city: str | None, province: str | None) -> str | None:
+        """Get CCAA from city or province."""
+        if not city and not province:
+            return None
+
+        search = (city or "").lower() + " " + (province or "").lower()
+
+        for key, (_, _, ccaa) in self.DESTINATIONS.items():
+            if key in search:
+                return ccaa
+
+        return None
 
     def _build_markdown_description(
         self, raw_data: dict[str, Any], duration: int, city: str | None
@@ -693,14 +731,20 @@ class VacacionesSeniorsAdapter(BaseAdapter):
                 logo_url="https://vacacionesseniors.com/wp-content/uploads/2020/03/Vacaciones-Seniors-Color.png",
             )
 
+            # Location: if no specific destination, use "Varios destinos" in all 3 fields
+            fallback = "Varios destinos"
+            final_city = city or fallback
+            final_province = province or fallback
+            final_ccaa = self._get_ccaa_from_destination(city, province) or fallback
+
             return EventCreate(
                 title=title,
                 start_date=start_date,
                 end_date=end_date,
                 description=description,
-                city=city or "Varios destinos",
-                province=province,
-                comunidad_autonoma=None,  # Multi-region
+                city=final_city,
+                province=final_province,
+                comunidad_autonoma=final_ccaa,
                 country="España",
                 location_type=LocationType.PHYSICAL,
                 external_url=detail_url,
