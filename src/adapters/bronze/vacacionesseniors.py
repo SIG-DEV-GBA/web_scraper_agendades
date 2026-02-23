@@ -12,6 +12,7 @@ Uses Firecrawl for detail pages to get JS-rendered price tables.
 
 import asyncio
 import os
+import random
 import re
 from datetime import date, timedelta
 from typing import Any
@@ -194,12 +195,18 @@ class VacacionesSeniorsAdapter(BaseAdapter):
         return parts[-1] if parts else "unknown"
 
     async def _fetch_details(self, events: list[dict[str, Any]]) -> None:
-        """Fetch detail pages using Firecrawl to get JS-rendered content."""
+        """Fetch detail pages using Firecrawl to get JS-rendered content.
+
+        Uses anti-blocking patterns:
+        - Random delays between requests (2-5 seconds)
+        - Longer backoff on 500 errors (10-20 seconds)
+        - Skip Firecrawl after consecutive failures
+        """
         firecrawl_url = os.getenv("FIRECRAWL_URL", "https://firecrawl.si-erp.cloud")
         firecrawl = get_firecrawl_client(base_url=firecrawl_url)
 
-        # Delay between requests to avoid rate limiting (3 seconds)
-        request_delay = 3.0
+        consecutive_failures = 0
+        use_firecrawl = True  # Disable if too many failures
 
         for i, event in enumerate(events):
             detail_url = event.get("detail_url")
@@ -207,24 +214,55 @@ class VacacionesSeniorsAdapter(BaseAdapter):
                 continue
 
             try:
-                # Add delay between requests (skip first)
+                # Anti-blocking delay between requests (random 2-5 seconds)
                 if i > 0:
-                    await asyncio.sleep(request_delay)
+                    delay = random.uniform(2, 5)
+                    await asyncio.sleep(delay)
 
-                # Use Firecrawl for JS-rendered content (price tables)
-                result = await firecrawl.scrape(
-                    detail_url,
-                    formats=["markdown"],
-                    wait_for=".et_pb_toggle",
-                    timeout=30000,
-                )
+                success = False
 
-                if result.success and result.markdown:
-                    details = self._parse_detail_page(result.markdown, detail_url)
-                    event.update(details)
-                else:
-                    # Fallback to regular fetch
-                    self.logger.debug("firecrawl_fallback", url=detail_url, error=result.error)
+                # Use Firecrawl if enabled and not failing
+                if use_firecrawl and consecutive_failures < 3:
+                    result = await firecrawl.scrape(
+                        detail_url,
+                        formats=["markdown"],
+                        wait_for=".et_pb_toggle",
+                        timeout=30000,
+                    )
+
+                    if result.success and result.markdown:
+                        details = self._parse_detail_page(result.markdown, detail_url)
+                        event.update(details)
+                        success = True
+                        consecutive_failures = 0
+                    else:
+                        consecutive_failures += 1
+                        self.logger.debug(
+                            "firecrawl_fallback",
+                            url=detail_url,
+                            error=result.error,
+                            consecutive_failures=consecutive_failures,
+                        )
+                        # Longer backoff on failure (10-20 seconds)
+                        if consecutive_failures >= 2:
+                            backoff = random.uniform(10, 20)
+                            self.logger.warning(
+                                "firecrawl_backoff",
+                                backoff_seconds=round(backoff, 1),
+                                failures=consecutive_failures,
+                            )
+                            await asyncio.sleep(backoff)
+
+                        if consecutive_failures >= 3:
+                            self.logger.warning(
+                                "firecrawl_disabled",
+                                reason="too_many_failures",
+                                switching_to="direct_http",
+                            )
+                            use_firecrawl = False
+
+                # Fallback to direct HTTP
+                if not success:
                     response = await self.fetch_url(detail_url)
                     details = self._parse_detail_page(response.text, detail_url)
                     event.update(details)
@@ -234,6 +272,8 @@ class VacacionesSeniorsAdapter(BaseAdapter):
 
             except Exception as e:
                 self.logger.warning("detail_fetch_error", url=detail_url, error=str(e))
+                # Extra delay after error
+                await asyncio.sleep(random.uniform(5, 10))
 
         await firecrawl.close()
 
