@@ -677,6 +677,9 @@ class InsertionPipeline:
 
         Uses embedding-based classification on the normalized_text from LLM.
         This provides more consistent category assignment than LLM alone.
+
+        Note: If the adapter has already set category_slugs, it is respected
+        and not overridden by the classifier (e.g., VacacionesSeniors → social).
         """
         # Get category classifier for embedding-based classification
         classifier = get_category_classifier()
@@ -686,27 +689,37 @@ class InsertionPipeline:
             if not enrichment:
                 continue
 
-            # Hybrid classification: Use normalized_text for embedding-based categorization
-            if enrichment.normalized_text:
-                # Classify using embeddings (more consistent than LLM categories)
-                categories, scores = classifier.classify(
-                    text=enrichment.normalized_text,
-                    title=event.title,
-                )
-                if categories:
-                    event.category_slugs = categories
-                    logger.debug(
-                        "hybrid_classification",
-                        event_id=event.external_id,
-                        categories=categories,
-                        top_score=max(scores.values()) if scores else 0,
+            # Skip classification if adapter already set category_slugs
+            # (e.g., VacacionesSeniors sets "social" explicitly)
+            if not event.category_slugs:
+                # Hybrid classification: Use normalized_text for embedding-based categorization
+                if enrichment.normalized_text:
+                    # Classify using embeddings (more consistent than LLM categories)
+                    categories, scores = classifier.classify(
+                        text=enrichment.normalized_text,
+                        title=event.title,
                     )
+                    if categories:
+                        event.category_slugs = categories
+                        logger.debug(
+                            "hybrid_classification",
+                            event_id=event.external_id,
+                            categories=categories,
+                            top_score=max(scores.values()) if scores else 0,
+                        )
+                    elif enrichment.category_slugs:
+                        # Fallback to LLM categories if embedding fails
+                        event.category_slugs = enrichment.category_slugs
                 elif enrichment.category_slugs:
-                    # Fallback to LLM categories if embedding fails
+                    # No normalized_text, use LLM categories directly
                     event.category_slugs = enrichment.category_slugs
-            elif enrichment.category_slugs:
-                # No normalized_text, use LLM categories directly
-                event.category_slugs = enrichment.category_slugs
+            else:
+                logger.debug(
+                    "category_preserved",
+                    event_id=event.external_id,
+                    categories=event.category_slugs,
+                    reason="adapter_fixed",
+                )
 
             # Summary
             if enrichment.summary:
