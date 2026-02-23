@@ -10,6 +10,7 @@ We create ONE event per circuit with the next available date.
 Uses Firecrawl for detail pages to get JS-rendered price tables.
 """
 
+import asyncio
 import os
 import re
 from datetime import date, timedelta
@@ -197,12 +198,19 @@ class VacacionesSeniorsAdapter(BaseAdapter):
         firecrawl_url = os.getenv("FIRECRAWL_URL", "https://firecrawl.si-erp.cloud")
         firecrawl = get_firecrawl_client(base_url=firecrawl_url)
 
+        # Delay between requests to avoid rate limiting (3 seconds)
+        request_delay = 3.0
+
         for i, event in enumerate(events):
             detail_url = event.get("detail_url")
             if not detail_url:
                 continue
 
             try:
+                # Add delay between requests (skip first)
+                if i > 0:
+                    await asyncio.sleep(request_delay)
+
                 # Use Firecrawl for JS-rendered content (price tables)
                 result = await firecrawl.scrape(
                     detail_url,
