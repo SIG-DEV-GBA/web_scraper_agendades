@@ -1008,6 +1008,26 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         requires_detail_fetch=True,
         max_pages=1,
     ),
+    # ============================================================
+    # SOCIAL CATEGORY SOURCES (custom adapters)
+    # ============================================================
+    # ---- VACACIONES SENIORS (National - Senior travel circuits) ----
+    BronzeSourceConfig(
+        slug="vacacionesseniors",
+        name="Vacaciones Seniors - Circuitos para mayores",
+        listing_url="https://vacacionesseniors.com/circuitos-culturales-salidas-desde-madrid/",
+        ccaa="Comunidad de Madrid",  # Base location (departure point)
+        ccaa_code="MD",
+        province="Madrid",
+        city="Madrid",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=True,  # Uses Firecrawl for JS-rendered price tables
+        event_card_selector="article.dp-dfg-item",
+        title_selector=".dp-dfg-header h1",
+        link_selector="a[href*='vacacionesseniors.com']",
+        requires_detail_fetch=True,
+        max_pages=1,
+    ),
 ]
 
 # Register all Bronze sources

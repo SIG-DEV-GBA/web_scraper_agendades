@@ -495,6 +495,11 @@ class InsertionPipeline:
                 from src.adapters.bronze.viralagenda.base import ViralAgendaAdapter
                 return ViralAgendaAdapter(self.config.source_slug)
 
+            # Use custom adapter for VacacionesSeniors (senior travel circuits)
+            if self.config.source_slug == "vacacionesseniors":
+                from src.adapters.bronze.vacacionesseniors import VacacionesSeniorsAdapter
+                return VacacionesSeniorsAdapter()
+
             # Generic bronze adapter for other sources
             from src.adapters.bronze_scraper_adapter import BronzeScraperAdapter
             return BronzeScraperAdapter(self.config.source_slug)

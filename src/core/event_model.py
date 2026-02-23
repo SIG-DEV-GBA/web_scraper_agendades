@@ -134,6 +134,7 @@ class EventCreate(BaseModel):
     is_free: bool | None = None
     price: float | None = None  # Numeric price if available
     price_info: str | None = None  # Full price text (e.g., "Entrada gratuita con reserva")
+    alternative_dates: dict | None = None  # Multi-date events: {"dates": ["2026-03-08"], "prices": {"2026-03-08": 305}}
 
     # Accessibility (structured data for event_accessibility table)
     accessibility: EventAccessibility | None = None
