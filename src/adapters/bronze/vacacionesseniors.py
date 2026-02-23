@@ -214,12 +214,13 @@ class VacacionesSeniorsAdapter(BaseAdapter):
                 continue
 
             try:
-                # Anti-blocking delay between requests (random 5-10 seconds)
+                # Anti-blocking delay between requests (random 3-5 seconds)
                 if i > 0:
-                    delay = random.uniform(5, 10)
+                    delay = random.uniform(3, 5)
                     await asyncio.sleep(delay)
 
                 success = False
+                self.logger.debug("fetching_detail", index=i + 1, total=len(events), url=detail_url[-40:])
 
                 # Use Firecrawl if enabled and not failing
                 if use_firecrawl and consecutive_failures < 3:
@@ -274,7 +275,7 @@ class VacacionesSeniorsAdapter(BaseAdapter):
                     details = self._parse_detail_page(response.text, detail_url)
                     event.update(details)
 
-                if (i + 1) % 10 == 0:
+                if (i + 1) % 5 == 0:
                     self.logger.info("detail_fetch_progress", fetched=i + 1, total=len(events))
 
             except Exception as e:
