@@ -32,6 +32,8 @@ QUALITY_WEIGHTS = {
 }
 
 # Fields that can be merged from a new event into an existing one
+# Note: Only include fields that exist in the events table schema
+# category_slugs is stored in event_categories junction table (N:M), not events
 MERGEABLE_FIELDS = [
     "description",
     "summary",
@@ -48,8 +50,6 @@ MERGEABLE_FIELDS = [
     "venue_name",
     "address",
     "external_url",
-    "category_id",
-    "category_slugs",
     "district",
     "postal_code",
 ]

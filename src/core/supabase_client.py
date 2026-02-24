@@ -847,6 +847,14 @@ class SupabaseClient:
             update_data = {k: merged_data[k] for k in fields_to_update if k in merged_data}
             update_data["updated_at"] = "now()"
 
+            # Serialize time/date objects to strings for JSON compatibility
+            from datetime import date, time
+            for key, val in update_data.items():
+                if isinstance(val, time):
+                    update_data[key] = val.isoformat()
+                elif isinstance(val, date):
+                    update_data[key] = val.isoformat()
+
             response = (
                 self._client.table("events")
                 .update(update_data)
