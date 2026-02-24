@@ -1,25 +1,26 @@
 """Soledad No Deseada adapter - Social activities against loneliness.
 
 Source: https://soledadnodeseada.es/actividades/
-Tier: Bronze (Playwright for dynamic loading + detail pages)
+Tier: Bronze (Firecrawl with actions for dynamic loading)
 CCAA: Comunidad de Madrid
 Category: social (actividades contra la soledad)
 
-Uses Playwright to click "load more" button dynamically until we have enough
-future events. Each activity has a detail page with date, time, location.
+Uses Firecrawl with click actions to load more activities dynamically.
+Each activity has a detail page with date, time, location.
 """
 
 import asyncio
+import os
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
 
 from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType
+from src.core.firecrawl_client import get_firecrawl_client
 from src.logging import get_logger
 
 logger = get_logger(__name__)
@@ -58,91 +59,67 @@ class SoledadNoDeseadaAdapter(BaseAdapter):
     ) -> list[dict[str, Any]]:
         """Fetch activities from Soledad No Deseada.
 
-        Uses Playwright to handle dynamic "load more" button.
-        Clicks are dynamic based on limit - stops when we have enough future events.
+        Uses Firecrawl with click actions to load more activities.
+        Number of clicks is calculated based on limit (approx 8 events per click).
         """
         events = []
         effective_limit = min(max_events, limit) if limit else max_events
 
-        # Calculate how many clicks we might need (approx 8 events per click)
-        # But we'll stop early if we get enough future events
-        max_clicks = min(50, (effective_limit // 8) + 10)
+        # Calculate clicks needed (approx 8 events per click, +5 buffer)
+        num_clicks = min(30, (effective_limit // 8) + 5)
 
         try:
-            self.logger.info("fetching_soledadnodeseada", limit=effective_limit)
+            self.logger.info("fetching_soledadnodeseada", limit=effective_limit, clicks=num_clicks)
 
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                page = await browser.new_page()
+            firecrawl_url = os.getenv("FIRECRAWL_URL", "https://firecrawl.si-erp.cloud")
+            firecrawl = get_firecrawl_client(base_url=firecrawl_url)
 
-                await page.goto(self.LISTING_URL, wait_until="networkidle")
-                await page.wait_for_timeout(2000)
+            # Build actions: initial wait + N clicks on "load more"
+            actions = [{"type": "wait", "milliseconds": 3000}]
+            for _ in range(num_clicks):
+                actions.append({"type": "click", "selector": ".dmach-loadmore"})
+                actions.append({"type": "wait", "milliseconds": 1500})
 
-                # Click "load more" until we have enough URLs or no more content
-                clicks = 0
-                prev_count = 0
-                stale_count = 0
+            # Fetch listing page with all clicks
+            result = await firecrawl.scrape(
+                self.LISTING_URL,
+                formats=["html"],
+                timeout=120000,  # 2 min for all clicks
+                actions=actions,
+            )
 
-                while clicks < max_clicks:
-                    btn = page.locator(".dmach-loadmore")
+            if not result.success:
+                self.logger.error("firecrawl_listing_error", error=result.error)
+                # Fallback: try without actions (just initial content)
+                result = await firecrawl.scrape(
+                    self.LISTING_URL,
+                    formats=["html"],
+                    timeout=30000,
+                )
 
-                    if await btn.count() == 0 or not await btn.is_visible():
-                        self.logger.debug("load_more_button_gone", clicks=clicks)
-                        break
+            seen_urls = set()
 
-                    try:
-                        await btn.click()
-                        await page.wait_for_timeout(1200)
-                        clicks += 1
-
-                        # Count URLs every 5 clicks to check progress
-                        if clicks % 5 == 0:
-                            links = await page.locator('a[href*="/actividades/"]').all()
-                            count = len([
-                                await l.get_attribute("href")
-                                for l in links
-                                if (await l.get_attribute("href") or "").count("/") > 4
-                            ])
-
-                            if count == prev_count:
-                                stale_count += 1
-                                if stale_count >= 2:
-                                    break
-                            else:
-                                stale_count = 0
-
-                            prev_count = count
-
-                            # Stop if we have way more than we need
-                            if count > effective_limit * 2:
-                                break
-
-                    except Exception as e:
-                        self.logger.debug("click_error", error=str(e))
-                        break
+            if result.success and result.html:
+                soup = BeautifulSoup(result.html, "html.parser")
 
                 # Extract all activity URLs
-                links = await page.locator('a[href*="/actividades/"]').all()
-                seen_urls = set()
-
-                for link in links:
-                    href = await link.get_attribute("href")
-                    if href and "/actividades/" in href and href.count("/") > 4:
-                        # Skip the listing page itself
+                for link in soup.select('a[href*="/actividades/"]'):
+                    href = link.get("href", "")
+                    if "/actividades/" in href and href.count("/") > 4:
                         if href.rstrip("/") != self.LISTING_URL.rstrip("/"):
                             seen_urls.add(href)
 
-                self.logger.info(
-                    "urls_collected",
-                    clicks=clicks,
-                    total_urls=len(seen_urls),
-                )
+            self.logger.info(
+                "urls_collected",
+                clicks=num_clicks,
+                total_urls=len(seen_urls),
+            )
 
-                await browser.close()
+            await firecrawl.close()
 
             # Fetch detail pages
             urls_list = list(seen_urls)
-            if fetch_details:
+            if fetch_details and urls_list:
                 events = await self._fetch_details(urls_list, effective_limit)
             else:
                 events = [{"detail_url": url} for url in urls_list[:effective_limit]]

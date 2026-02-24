@@ -149,7 +149,7 @@ class EventCreate(BaseModel):
 
     # Recurrence (for recurring events)
     is_recurring: bool = False
-    recurrence_rule: str | None = None  # iCal RRULE format
+    recurrence_rule: dict | None = None  # JSONB: {"frequency": "weekly", "weekDays": ["wednesday"], ...}
     excluded_days: list[str] = Field(default_factory=list)
 
     @field_validator("end_date")
