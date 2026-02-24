@@ -81,6 +81,11 @@ class RSSSourceConfig:
     # Default province (for single-province sources)
     default_province: str | None = None
 
+    # Default city/venue for sources with fixed location
+    default_city: str | None = None
+    default_venue: str | None = None
+    default_address: str | None = None
+
     # RSS parsing
     date_from_published: bool = True  # Use published_parsed for start_date
     summary_has_html: bool = True  # Summary contains HTML to parse
@@ -116,6 +121,18 @@ SILVER_RSS_SOURCES: dict[str, RSSSourceConfig] = {
         default_province="Huesca",
     ),
     # cantabria_turismo eliminada - cubierta por viralagenda_cantabria con más eventos
+    "fundacion_telefonica": RSSSourceConfig(
+        slug="fundacion_telefonica",
+        name="Espacio Fundación Telefónica (talleres RECONECTADOS + cultura)",
+        url="https://espacio.fundaciontelefonica.com/eventos/?ical=1",
+        ccaa="Comunidad de Madrid",
+        ccaa_code="MD",
+        feed_type="ical",
+        default_province="Madrid",
+        default_city="Madrid",
+        default_venue="Espacio Fundación Telefónica",
+        default_address="C/ Fuencarral, 3",
+    ),
 }
 
 
@@ -227,6 +244,7 @@ class SilverRSSAdapter(BaseAdapter):
                         "url": str(component.get("URL", "")),
                         "location": str(component.get("LOCATION", "")),
                         "categories": [],
+                        "image_url": None,
                         "dtstart": None,
                         "dtend": None,
                     }
@@ -261,6 +279,17 @@ class SilverRSSAdapter(BaseAdapter):
                             item["categories"] = [str(c) for c in categories.cats]
                         elif hasattr(categories, "to_ical"):
                             item["categories"] = [str(categories)]
+
+                    # Parse ATTACH (image URL) - The Events Calendar format
+                    attach = component.get("ATTACH")
+                    if attach:
+                        # ATTACH can be a URL string or vUri object
+                        attach_str = str(attach)
+                        if attach_str.startswith("http") and any(
+                            ext in attach_str.lower()
+                            for ext in [".jpg", ".jpeg", ".png", ".webp", ".gif"]
+                        ):
+                            item["image_url"] = attach_str
 
                     items.append(item)
 
@@ -535,38 +564,67 @@ class SilverRSSAdapter(BaseAdapter):
                 if len(description) > 2000:
                     description = description[:2000] + "..."
 
-            # Location parsing - Cantabria format: "City, City, Region"
+            # Location parsing - flexible format
+            # Fundación Telefónica: "Espacio Fundación Telefónica, C/ Fuencarral, 3, Madrid"
+            # Cantabria: "Castro Urdiales, Castro Urdiales, Asón-Agüera"
             location = raw_data.get("location", "")
             venue_name = None
             city = None
+            address = None
 
             if location:
                 # Clean escaped commas
                 location = location.replace("\\,", ",")
-                # Split by comma - format: "Castro Urdiales, Castro Urdiales, Asón-Agüera"
                 parts = [p.strip() for p in location.split(",")]
-                if len(parts) >= 2:
-                    city = parts[0]  # First part is usually the city
-                    # If first two parts are the same, just use one
-                    if len(parts) >= 2 and parts[0].lower() == parts[1].lower():
+
+                if len(parts) >= 4:
+                    # Long format: "Venue, Street, Number, City"
+                    venue_name = parts[0]
+                    address = f"{parts[1]}, {parts[2]}"
+                    city = parts[-1]  # Last part is city
+                elif len(parts) >= 2:
+                    # Check if last part looks like a city (Madrid, etc)
+                    if parts[-1] in ["Madrid", "Barcelona", "Valencia", "Sevilla", "Málaga"]:
+                        city = parts[-1]
+                        venue_name = parts[0]
+                        if len(parts) > 2:
+                            address = ", ".join(parts[1:-1])
+                    else:
+                        # Cantabria format: "City, City, Region"
                         city = parts[0]
-                    venue_name = parts[0] if len(parts) > 2 else None
+                        if len(parts) >= 2 and parts[0].lower() == parts[1].lower():
+                            city = parts[0]
+                        venue_name = parts[0] if len(parts) > 2 else None
                 elif len(parts) == 1:
                     city = parts[0]
 
-            # Province is always Cantabria (uniprovincial)
-            province = self.rss_config.default_province or "Cantabria"
+            # Use defaults from config if not found in location
+            if not city:
+                city = self.rss_config.default_city
+            if not venue_name:
+                venue_name = self.rss_config.default_venue
+            if not address:
+                address = self.rss_config.default_address
+
+            # Province from config
+            province = self.rss_config.default_province
+
+            # Image URL from ATTACH
+            image_url = raw_data.get("image_url")
 
             # Categories
             categories = raw_data.get("categories", [])
             category_name = categories[0] if categories else None
 
-            # Check for free indicators in description
+            # Check for free indicators in description or title
             is_free = None
-            if description:
-                desc_lower = description.lower()
-                if any(w in desc_lower for w in ["gratis", "gratuito", "gratuita", "entrada libre"]):
-                    is_free = True
+            text_to_check = f"{title} {description}".lower()
+            if any(w in text_to_check for w in ["gratis", "gratuito", "gratuita", "entrada libre"]):
+                is_free = True
+
+            # RECONECTADOS events are free digital literacy workshops
+            if "RECONECTADOS" in title.upper():
+                is_free = True
 
             return EventCreate(
                 title=title,
@@ -576,12 +634,14 @@ class SilverRSSAdapter(BaseAdapter):
                 start_time=start_time_val,
                 location_type=LocationType.PHYSICAL,
                 venue_name=venue_name,
+                address=address,
                 city=city,
                 province=province,
                 comunidad_autonoma=self.ccaa,
                 source_id=self.source_id,
                 external_url=external_url,
                 external_id=external_id,
+                source_image_url=image_url,
                 category_name=category_name,
                 is_free=is_free,
                 category_slugs=[],  # Filled by LLM enricher
