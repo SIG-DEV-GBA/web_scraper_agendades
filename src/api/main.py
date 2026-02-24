@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.api.routes import sources, scrape, runs, scheduler
+from src.api.routes import sources, scrape, runs, scheduler, dev
 from src.core.job_store import mark_interrupted_jobs
 from src.logging import get_logger
 
@@ -54,6 +54,7 @@ app.include_router(sources.router, prefix="/sources", tags=["Sources"])
 app.include_router(scrape.router, prefix="/scrape", tags=["Scrape"])
 app.include_router(runs.router, prefix="/runs", tags=["Runs"])
 app.include_router(scheduler.router, prefix="/scheduler", tags=["Scheduler"])
+app.include_router(dev.router, prefix="/dev", tags=["Development"])
 
 
 @app.get("/", tags=["Health"])
