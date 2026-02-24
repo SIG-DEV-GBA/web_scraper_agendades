@@ -86,6 +86,9 @@ class RSSSourceConfig:
     default_venue: str | None = None
     default_address: str | None = None
 
+    # Enrich iCal events with JSON-LD from event pages (for descriptions)
+    enrich_from_jsonld: bool = False
+
     # RSS parsing
     date_from_published: bool = True  # Use published_parsed for start_date
     summary_has_html: bool = True  # Summary contains HTML to parse
@@ -132,6 +135,7 @@ SILVER_RSS_SOURCES: dict[str, RSSSourceConfig] = {
         default_city="Madrid",
         default_venue="Espacio Fundación Telefónica",
         default_address="C/ Fuencarral, 3",
+        enrich_from_jsonld=True,  # Get descriptions from event pages
     ),
 }
 
@@ -298,11 +302,98 @@ class SilverRSSAdapter(BaseAdapter):
                 source=self.source_id,
                 count=len(items),
             )
+
+            # Enrich with JSON-LD from event pages if configured
+            if self.rss_config.enrich_from_jsonld:
+                items = await self._enrich_ical_with_jsonld(items)
+
             return items
 
         except Exception as e:
             self.logger.error("ical_fetch_error", error=str(e))
             return []
+
+    async def _enrich_ical_with_jsonld(
+        self, items: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Enrich iCal events with data from JSON-LD on event pages.
+
+        Fetches each event page and extracts description from JSON-LD.
+        Uses concurrent requests with rate limiting.
+        """
+        import asyncio
+        import html as html_lib
+        import json as json_module
+
+        enriched = []
+        semaphore = asyncio.Semaphore(3)  # Max 3 concurrent requests
+
+        async def enrich_one(item: dict[str, Any]) -> dict[str, Any]:
+            url = item.get("url", "")
+            if not url:
+                return item
+
+            async with semaphore:
+                try:
+                    response = await self.fetch_url(url)
+                    html = response.text
+
+                    # Extract JSON-LD
+                    import re
+                    jsonld_match = re.search(
+                        r'<script type="application/ld\+json">\s*(\[[\s\S]*?\])\s*</script>',
+                        html,
+                    )
+                    if jsonld_match:
+                        jsonld_str = jsonld_match.group(1)
+                        jsonld = json_module.loads(jsonld_str)
+
+                        # Find Event object
+                        for obj in jsonld if isinstance(jsonld, list) else [jsonld]:
+                            if obj.get("@type") == "Event":
+                                # Extract description
+                                desc = obj.get("description", "")
+                                if desc and not item.get("description"):
+                                    # Clean HTML entities
+                                    desc = html_lib.unescape(desc)
+                                    # Remove HTML tags
+                                    desc = re.sub(r"<[^>]+>", "", desc)
+                                    # Clean whitespace
+                                    desc = re.sub(r"\s+", " ", desc).strip()
+                                    item["description"] = desc
+
+                                # Also get image if not present
+                                if not item.get("image_url"):
+                                    img = obj.get("image", "")
+                                    if img:
+                                        item["image_url"] = img
+                                break
+
+                    # Small delay to be polite
+                    await asyncio.sleep(0.2)
+
+                except Exception as e:
+                    self.logger.debug(
+                        "jsonld_enrich_error",
+                        url=url[:50],
+                        error=str(e),
+                    )
+
+            return item
+
+        # Enrich all items concurrently
+        tasks = [enrich_one(item) for item in items]
+        enriched = await asyncio.gather(*tasks)
+
+        enriched_count = sum(1 for i in enriched if i.get("description"))
+        self.logger.info(
+            "enriched_ical_events",
+            source=self.source_id,
+            total=len(enriched),
+            with_description=enriched_count,
+        )
+
+        return list(enriched)
 
     def parse_event(self, raw_data: dict[str, Any]) -> EventCreate | None:
         """Parse a single RSS/iCal item into EventCreate."""
