@@ -49,6 +49,11 @@ class EventEnrichment(BaseModel):
         max_length=500,
         description="Texto limpio y contextualizado para generar embedding de calidad. Describe QUÉ es el evento, TIPO de actividad, PÚBLICO objetivo."
     )
+    normalized_address: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Dirección normalizada para geocoding: expandir abreviaturas, formato limpio"
+    )
     category_slugs: list[str] = Field(
         default_factory=list,
         description="1-3 categories from: cultural, social, economica, politica, sanitaria, tecnologia"
@@ -204,6 +209,7 @@ CAMPOS DE CADA EVENTO:
 - title: título del evento
 - description: descripción (puede estar vacía)
 - venue: lugar donde se celebra ← MUY IMPORTANTE PARA DETERMINAR is_free (biblioteca, museo, etc.)
+- address: dirección física del evento (calle, número) ← NORMALIZAR PARA GEOCODING
 - location: REGIÓN DE ESPAÑA (ciudad, provincia, comunidad autónoma) ← USA ESTO PARA CONTEXTUALIZAR IMÁGENES
 - type: tipo de evento (si está disponible)
 - audience: público objetivo
@@ -408,6 +414,31 @@ REGLAS PARA PRICE_DETAILS (información de precios):
   * "Desde 10€" (redundante)
   * "Precio: 10 euros" (redundante)
 
+REGLAS PARA NORMALIZED_ADDRESS (IMPORTANTE - para geocoding preciso):
+El campo "address" puede venir con abreviaturas o formatos raros. NORMALIZA para que funcione bien con Nominatim/OpenStreetMap.
+
+TRANSFORMACIONES REQUERIDAS:
+1. Expandir abreviaturas españolas:
+   - "C." o "C/" → "Calle"
+   - "Av." o "Avda." → "Avenida"
+   - "Pº" o "P.º" → "Paseo"
+   - "Pza." o "Pl." → "Plaza"
+   - "Ctra." → "Carretera"
+   - "Urb." → "Urbanización"
+2. Limpiar números de portal extraños:
+   - "5-7" → "5" (usar solo el primer número)
+   - "23 bis" → "23"
+   - "s/n" → eliminar
+3. Formato final: "Tipo_via Nombre_via Número, Ciudad"
+
+EJEMPLOS:
+- "C. Solano, 5-7" + ciudad="Pozuelo de Alarcón" → "Calle Solano 5, Pozuelo de Alarcón"
+- "Av. Alfonso XIII 97" + ciudad="Madrid" → "Avenida Alfonso XIII 97, Madrid"
+- "P.º Esperanza Esq. C.La Caoba" + ciudad="Madrid" → "Paseo Esperanza, Madrid"
+- "Pza. Mayor, 1" + ciudad="Salamanca" → "Plaza Mayor 1, Salamanca"
+
+Si no hay address o es muy ambigua → normalized_address = null
+
 REGLAS PARA NORMALIZED_TEXT (MUY IMPORTANTE - para embeddings de calidad):
 El campo "normalized_text" es CRÍTICO para la clasificación semántica. Debe ser un texto LIMPIO y CONTEXTUALIZADO.
 
@@ -450,6 +481,7 @@ Responde SOLO con JSON válido (array de objetos):
   {{
     "event_id": "...",
     "normalized_text": "Texto limpio para embedding (100-200 chars)",
+    "normalized_address": "Dirección normalizada para geocoding o null",
     "category_slugs": ["cultural"],
     "summary": "Resumen corto (max 150 chars) o null",
     "description": "Descripción más larga si no hay original (max 500 chars) o null",
@@ -550,6 +582,7 @@ class LLMEnricher:
             "description": description[:500],
             "description_length": len(description),  # So LLM knows if it needs to expand
             "venue": (event.get("venue_name", "") or "")[:100],
+            "address": (event.get("address", "") or "")[:150],  # Original address for normalization
             "location": location,  # Regional context for image keywords
             "type": (event.get("@type", "") or "").split("/")[-1],
             "audience": event.get("audience", "") or "",

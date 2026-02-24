@@ -755,6 +755,10 @@ class InsertionPipeline:
                     event.is_free = True
                     event.price_info = None
 
+            # Normalized address for better geocoding
+            if enrichment.normalized_address:
+                event.address = enrichment.normalized_address
+
             # Fallback: infer from venue (public venues often free)
             if event.is_free is None and event.venue_name:
                 venue_lower = event.venue_name.lower()
