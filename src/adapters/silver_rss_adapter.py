@@ -713,8 +713,8 @@ class SilverRSSAdapter(BaseAdapter):
             if any(w in text_to_check for w in ["gratis", "gratuito", "gratuita", "entrada libre"]):
                 is_free = True
 
-            # RECONECTADOS events are free digital literacy workshops
-            if "RECONECTADOS" in title.upper():
+            # Espacio Fundación Telefónica - ALL events are free (confirmed policy)
+            if self.slug == "fundacion_telefonica":
                 is_free = True
 
             return EventCreate(
