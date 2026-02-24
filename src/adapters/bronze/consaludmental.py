@@ -247,9 +247,15 @@ class ConSaludMentalAdapter(BaseAdapter):
                     async with httpx.AsyncClient(timeout=15) as client:
                         response = await client.get(detail_url)
                         if response.status_code == 200:
-                            organizer_name = self._extract_organizer(response.text)
+                            html = response.text
+                            # Extract organizer
+                            organizer_name = self._extract_organizer(html)
                             if organizer_name:
                                 event["organizer_name"] = organizer_name
+                            # Extract online URL (YouTube, Zoom, etc.)
+                            online_url = self._extract_online_url(html)
+                            if online_url:
+                                event["online_url"] = online_url
                 except Exception as e:
                     self.logger.debug("detail_fetch_error", url=detail_url, error=str(e))
 
@@ -286,6 +292,55 @@ class ConSaludMentalAdapter(BaseAdapter):
             match = re.search(r"Organiza(?:dor)?[:\s]+([A-ZÁÉÍÓÚÑ][^.]{5,60})", text)
             if match:
                 return match.group(1).strip()
+
+        except Exception:
+            pass
+
+        return None
+
+    def _extract_online_url(self, html: str) -> str | None:
+        """Extract online streaming URL from event content.
+
+        Looks for YouTube, Zoom, Teams, or other streaming links
+        specifically within the event content area (not header/footer).
+        """
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+
+            # Look for streaming links only in content area
+            # MEC uses .mec-single-event for main content
+            content_areas = soup.select(".mec-single-event, .entry-content, .wpb-content-wrapper, article")
+
+            streaming_patterns = [
+                "youtube.com/channel",
+                "youtube.com/watch",
+                "youtube.com/@",
+                "youtu.be/",
+                "zoom.us/j/",
+                "zoom.us/my/",
+                "teams.microsoft.com",
+                "meet.google.com",
+                "webex.com",
+            ]
+
+            # Skip generic channel links (main site channel)
+            skip_patterns = [
+                "youtube.com/c/ConfederacionSaludMentalEspana",
+                "youtube.com/c/Conf",
+            ]
+
+            for area in content_areas:
+                for link in area.find_all("a", href=True):
+                    href = link.get("href", "")
+
+                    # Skip generic site links
+                    if any(skip in href for skip in skip_patterns):
+                        continue
+
+                    # Check if it's a streaming link
+                    for pattern in streaming_patterns:
+                        if pattern in href.lower():
+                            return href
 
         except Exception:
             pass
@@ -539,16 +594,21 @@ class ConSaludMentalAdapter(BaseAdapter):
                 logo_url=None,  # No logo for local organizers
             )
 
-            # Determine location type (some events are online)
-            location_type = LocationType.PHYSICAL
+            # Determine location type based on extracted data
+            online_url = raw_data.get("online_url")
+            has_physical = raw_data.get("venue_name") or raw_data.get("address")
             full_content = raw_data.get("full_content", "").lower()
-            has_online = "online" in full_content or "youtube" in full_content or "zoom" in full_content or "streaming" in full_content
-            has_physical = raw_data.get("venue_name") or raw_data.get("address") or "presencial" in full_content or "en persona" in full_content or "sede" in full_content
+            has_online_keywords = "online" in full_content or "youtube" in full_content or "zoom" in full_content or "streaming" in full_content
+            has_physical_keywords = "presencial" in full_content or "en persona" in full_content or "sede" in full_content
 
-            if has_online and has_physical:
-                location_type = LocationType.HYBRID
-            elif has_online:
-                location_type = LocationType.ONLINE
+            # Set location type
+            if online_url or has_online_keywords:
+                if has_physical or has_physical_keywords:
+                    location_type = LocationType.HYBRID
+                else:
+                    location_type = LocationType.ONLINE
+            else:
+                location_type = LocationType.PHYSICAL
 
             return EventCreate(
                 title=title,
@@ -563,6 +623,7 @@ class ConSaludMentalAdapter(BaseAdapter):
                 comunidad_autonoma=raw_data.get("ccaa"),
                 country="España",
                 location_type=location_type,
+                online_url=online_url,  # YouTube, Zoom, etc.
                 external_url=raw_data.get("detail_url"),
                 external_id=raw_data.get("external_id"),
                 source_id=self.source_id,
