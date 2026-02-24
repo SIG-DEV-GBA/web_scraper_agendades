@@ -35,6 +35,15 @@ SILVER_SOURCES: list[SilverSourceConfig] = [
         tier=SourceTier.SILVER,
         feed_type="rss",
     ),
+    SilverSourceConfig(
+        slug="fundacion_telefonica",
+        name="Espacio Fundación Telefónica (talleres RECONECTADOS + cultura)",
+        url="https://espacio.fundaciontelefonica.com/eventos/?ical=1",
+        ccaa="Comunidad de Madrid",
+        ccaa_code="MD",
+        tier=SourceTier.SILVER,
+        feed_type="ical",
+    ),
 ]
 
 # Register all Silver sources
