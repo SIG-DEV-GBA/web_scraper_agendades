@@ -410,6 +410,40 @@ class SupabaseClient:
             self.logger.warning("Failed to save contact", event_id=event_id, error=str(e))
             return False
 
+    async def _save_online(self, event_id: str, event: EventCreate) -> bool:
+        """Save online event info to event_online table.
+
+        For hybrid/online events with streaming URLs (YouTube, Zoom, etc.)
+        """
+        if not event.online_url:
+            return True
+
+        try:
+            # Detect platform from URL
+            platform = None
+            url_lower = event.online_url.lower()
+            if "youtube.com" in url_lower or "youtu.be" in url_lower:
+                platform = "YouTube"
+            elif "zoom.us" in url_lower:
+                platform = "Zoom"
+            elif "teams.microsoft.com" in url_lower:
+                platform = "Microsoft Teams"
+            elif "meet.google.com" in url_lower:
+                platform = "Google Meet"
+            elif "webex.com" in url_lower:
+                platform = "Webex"
+
+            data = {
+                "event_id": event_id,
+                "url": event.online_url,
+                "platform": platform,
+            }
+            self._client.table("event_online").insert(data).execute()
+            return True
+        except Exception as e:
+            self.logger.warning("Failed to save online info", event_id=event_id, error=str(e))
+            return False
+
     # ==========================================
     # Calendar Operations
     # ==========================================
@@ -470,17 +504,15 @@ class SupabaseClient:
         # Always set calendar_id to public calendar (required field)
         data["calendar_id"] = PUBLIC_CALENDAR_ID
 
-        # Map LocationType enum to Supabase modality values (Spanish)
-        modality_mapping = {
-            "physical": "presencial",
-            "online": "online",
-            "hybrid": "hibrido",
-        }
-
+        # Map LocationType enum to Supabase modality field
+        # LocationType values are already Spanish: presencial, online, hibrido
         if "location_type" in data:
             val = data["location_type"]
+            # Get the enum value (already in Spanish) or use as-is if string
             raw_value = val.value if hasattr(val, "value") else val
-            data["modality"] = modality_mapping.get(raw_value, "presencial")
+            # Validate it's a valid modality, default to presencial
+            valid_modalities = {"presencial", "online", "hibrido"}
+            data["modality"] = raw_value if raw_value in valid_modalities else "presencial"
             del data["location_type"]
 
         # Copy source_image_url to image_url (for scraper imports, skip approval workflow)
@@ -626,6 +658,10 @@ class SupabaseClient:
             # Save contact info
             if event.contact:
                 await self._save_contact(event_id, event)
+
+            # Save online event info (YouTube, Zoom, etc.)
+            if event.online_url:
+                await self._save_online(event_id, event)
 
             return inserted_event
 
