@@ -495,17 +495,13 @@ class InsertionPipeline:
                 from src.adapters.bronze.viralagenda.base import ViralAgendaAdapter
                 return ViralAgendaAdapter(self.config.source_slug)
 
-            # Use custom adapter for VacacionesSeniors (senior travel circuits)
-            if self.config.source_slug == "vacacionesseniors":
-                from src.adapters.bronze.vacacionesseniors import VacacionesSeniorsAdapter
-                return VacacionesSeniorsAdapter()
+            # Check if a custom adapter is registered for this source
+            from src.adapters import get_adapter
+            custom_adapter_class = get_adapter(self.config.source_slug)
+            if custom_adapter_class:
+                return custom_adapter_class()
 
-            # Use custom adapter for SoledadNoDeseada (social activities against loneliness)
-            if self.config.source_slug == "soledadnodeseada":
-                from src.adapters.bronze.soledadnodeseada import SoledadNoDeseadaAdapter
-                return SoledadNoDeseadaAdapter()
-
-            # Generic bronze adapter for other sources
+            # Generic bronze adapter for sources without custom adapters
             from src.adapters.bronze_scraper_adapter import BronzeScraperAdapter
             return BronzeScraperAdapter(self.config.source_slug)
 
