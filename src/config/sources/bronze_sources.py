@@ -1028,6 +1028,23 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         requires_detail_fetch=True,
         max_pages=1,
     ),
+    # ---- SOLEDAD NO DESEADA (Madrid - Social activities against loneliness) ----
+    BronzeSourceConfig(
+        slug="soledadnodeseada",
+        name="Soledad No Deseada - Actividades contra la soledad",
+        listing_url="https://soledadnodeseada.es/actividades/",
+        ccaa="Comunidad de Madrid",
+        ccaa_code="MD",
+        province="Madrid",
+        city="Madrid",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=True,  # Uses Firecrawl with actions for dynamic "load more"
+        event_card_selector="a[href*='/actividades/']",
+        title_selector="title",
+        link_selector="a[href*='/actividades/']",
+        requires_detail_fetch=True,
+        max_pages=1,
+    ),
 ]
 
 # Register all Bronze sources
