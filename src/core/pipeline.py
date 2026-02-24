@@ -500,6 +500,11 @@ class InsertionPipeline:
                 from src.adapters.bronze.vacacionesseniors import VacacionesSeniorsAdapter
                 return VacacionesSeniorsAdapter()
 
+            # Use custom adapter for SoledadNoDeseada (social activities against loneliness)
+            if self.config.source_slug == "soledadnodeseada":
+                from src.adapters.bronze.soledadnodeseada import SoledadNoDeseadaAdapter
+                return SoledadNoDeseadaAdapter()
+
             # Generic bronze adapter for other sources
             from src.adapters.bronze_scraper_adapter import BronzeScraperAdapter
             return BronzeScraperAdapter(self.config.source_slug)
