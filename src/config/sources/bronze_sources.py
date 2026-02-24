@@ -1028,6 +1028,23 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         requires_detail_fetch=True,
         max_pages=1,
     ),
+    # ---- DONAR SANGRE (Madrid - Blood donation mobile points) ----
+    BronzeSourceConfig(
+        slug="donarsangre",
+        name="Donar Sangre - Puntos Móviles de Donación",
+        listing_url="https://www.donarsangre.org/proximos-puntos-moviles/",
+        ccaa="Comunidad de Madrid",
+        ccaa_code="MD",
+        province="Madrid",
+        city="Madrid",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,  # Simple HTML, no JS needed
+        event_card_selector="li",
+        title_selector="a",
+        link_selector="a",
+        requires_detail_fetch=False,  # All info in listing page
+        max_pages=1,
+    ),
     # ---- SOLEDAD NO DESEADA (Madrid - Social activities against loneliness) ----
     # DESACTIVADA: La web no tiene fechas con año, genera fechas falsas futuras
     BronzeSourceConfig(
