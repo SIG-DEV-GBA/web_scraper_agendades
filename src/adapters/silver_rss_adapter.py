@@ -714,7 +714,7 @@ class SilverRSSAdapter(BaseAdapter):
                 is_free = True
 
             # Espacio Fundación Telefónica - ALL events are free (confirmed policy)
-            if self.slug == "fundacion_telefonica":
+            if self.source_id == "fundacion_telefonica":
                 is_free = True
 
             return EventCreate(
