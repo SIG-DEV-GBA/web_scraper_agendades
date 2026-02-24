@@ -147,8 +147,14 @@ class DonarSangreAdapter(BaseAdapter):
             # Build detail URL
             detail_url = f"{self.BASE_URL}{href}" if href.startswith("/") else href
 
+            # Build title with city and address
+            if address:
+                title = f"Donación de Sangre - {city} - {address}"
+            else:
+                title = f"Donación de Sangre - {city}"
+
             return {
-                "title": f"Donación de Sangre - {city}",
+                "title": title,
                 "start_date": event_date,
                 "start_time": start_time,
                 "end_time": end_time,
@@ -176,33 +182,17 @@ class DonarSangreAdapter(BaseAdapter):
             province = "Madrid"  # Most are in Madrid region
             ccaa = "Comunidad de Madrid"
 
-            # Build description
-            description_parts = [
-                "🩸 **Punto de donación de sangre**",
-                "",
-                "Acércate a donar sangre y ayuda a salvar vidas.",
-                "",
-            ]
+            # Build description - only requirements (location/time are in other fields)
+            description = """🩸 **Punto de donación de sangre**
 
-            if raw_data.get("address"):
-                description_parts.append(f"📍 **Ubicación:** {raw_data['address']}")
+Acércate a donar sangre y ayuda a salvar vidas.
 
-            if raw_data.get("start_time") and raw_data.get("end_time"):
-                description_parts.append(
-                    f"🕐 **Horario:** {raw_data['start_time'].strftime('%H:%M')} - {raw_data['end_time'].strftime('%H:%M')}"
-                )
+**Requisitos para donar:**
+- Tener entre 18 y 65 años
+- Pesar más de 50 kg
+- Estar en buen estado de salud
 
-            description_parts.extend([
-                "",
-                "**Requisitos para donar:**",
-                "- Tener entre 18 y 65 años",
-                "- Pesar más de 50 kg",
-                "- Estar en buen estado de salud",
-                "",
-                "Más información en [donarsangre.org](https://www.donarsangre.org)",
-            ])
-
-            description = "\n".join(description_parts)
+Más información en [donarsangre.org](https://www.donarsangre.org)"""
 
             # Organizer
             organizer = EventOrganizer(
