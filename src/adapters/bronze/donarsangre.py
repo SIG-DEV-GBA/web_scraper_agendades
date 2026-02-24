@@ -199,6 +199,7 @@ Más información en [donarsangre.org](https://www.donarsangre.org)"""
                 name="Centro de Transfusión de la Comunidad de Madrid",
                 url="https://www.donarsangre.org",
                 type="institucion",
+                logo_url="https://www.donarsangre.org/media/img/logo-cruz-roja.webp",
             )
 
             return EventCreate(
