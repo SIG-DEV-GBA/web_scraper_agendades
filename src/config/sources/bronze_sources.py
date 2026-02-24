@@ -1029,6 +1029,7 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         max_pages=1,
     ),
     # ---- SOLEDAD NO DESEADA (Madrid - Social activities against loneliness) ----
+    # DESACTIVADA: La web no tiene fechas con año, genera fechas falsas futuras
     BronzeSourceConfig(
         slug="soledadnodeseada",
         name="Soledad No Deseada - Actividades contra la soledad",
@@ -1038,6 +1039,7 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         province="Madrid",
         city="Madrid",
         tier=SourceTier.BRONZE,
+        is_active=False,  # Desactivada - eventos sin año explícito
         uses_firecrawl=True,  # Uses Firecrawl with actions for dynamic "load more"
         event_card_selector="a[href*='/actividades/']",
         title_selector="title",
