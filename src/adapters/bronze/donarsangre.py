@@ -208,7 +208,7 @@ Más información en [donarsangre.org](https://www.donarsangre.org)"""
                 start_time=raw_data.get("start_time"),
                 end_time=raw_data.get("end_time"),
                 description=description,
-                venue_name=raw_data.get("address"),
+                venue_name="Punto móvil de donación de sangre",
                 address=raw_data.get("address"),
                 city=city,
                 province=province,
