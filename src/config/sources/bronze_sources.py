@@ -1064,6 +1064,26 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         requires_detail_fetch=True,
         max_pages=1,
     ),
+    # ============================================================
+    # SANITARIA CATEGORY SOURCES (custom adapters)
+    # ============================================================
+    # ---- CON SALUD MENTAL (Nacional - Mental health events) ----
+    BronzeSourceConfig(
+        slug="consaludmental",
+        name="Confederación Salud Mental España",
+        listing_url="https://consaludmental.org/listado-eventos/",
+        ccaa="Nacional",
+        ccaa_code="ES",
+        province="",  # National scope
+        city="",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,  # Uses WordPress REST API
+        event_card_selector="",  # Custom adapter handles parsing
+        title_selector="",
+        link_selector="",
+        requires_detail_fetch=False,  # API returns full data
+        max_pages=1,
+    ),
 ]
 
 # Register all Bronze sources
