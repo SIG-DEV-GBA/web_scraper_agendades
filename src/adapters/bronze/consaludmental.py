@@ -10,12 +10,14 @@ Uses WordPress REST API for Modern Events Calendar (MEC) plugin.
 Dates and locations are parsed from HTML content field.
 """
 
+import asyncio
 import re
 from datetime import date, time as dt_time
 from html import unescape
 from typing import Any
 
 import httpx
+from bs4 import BeautifulSoup
 
 from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
@@ -221,11 +223,74 @@ class ConSaludMentalAdapter(BaseAdapter):
                 future_events=len(events),
             )
 
+            # Fetch detail pages to get organizer info
+            if fetch_details and events:
+                events = await self._fetch_detail_pages(events)
+
         except Exception as e:
             self.logger.error("fetch_error", error=str(e))
             raise
 
         return events
+
+    async def _fetch_detail_pages(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Fetch detail pages to extract organizer info."""
+        semaphore = asyncio.Semaphore(3)  # Limit concurrent requests
+
+        async def fetch_single(event: dict[str, Any]) -> dict[str, Any]:
+            async with semaphore:
+                detail_url = event.get("detail_url")
+                if not detail_url:
+                    return event
+
+                try:
+                    async with httpx.AsyncClient(timeout=15) as client:
+                        response = await client.get(detail_url)
+                        if response.status_code == 200:
+                            organizer_name = self._extract_organizer(response.text)
+                            if organizer_name:
+                                event["organizer_name"] = organizer_name
+                except Exception as e:
+                    self.logger.debug("detail_fetch_error", url=detail_url, error=str(e))
+
+                await asyncio.sleep(0.3)  # Rate limiting
+                return event
+
+        # Fetch all detail pages concurrently
+        tasks = [fetch_single(event) for event in events]
+        results = await asyncio.gather(*tasks)
+
+        self.logger.info("detail_pages_fetched", count=len(results))
+        return list(results)
+
+    def _extract_organizer(self, html: str) -> str | None:
+        """Extract organizer name from detail page HTML.
+
+        Looks for:
+        <div class="mec-single-event-organizer">
+            <h6>Organizer Name</h6>
+        </div>
+        """
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+
+            # Try MEC organizer div
+            organizer_div = soup.select_one(".mec-single-event-organizer")
+            if organizer_div:
+                h6 = organizer_div.select_one("h6")
+                if h6:
+                    return h6.get_text(strip=True)
+
+            # Fallback: look for "Organizador" or "Organiza" in text
+            text = soup.get_text(" ", strip=True)
+            match = re.search(r"Organiza(?:dor)?[:\s]+([A-ZÁÉÍÓÚÑ][^.]{5,60})", text)
+            if match:
+                return match.group(1).strip()
+
+        except Exception:
+            pass
+
+        return None
 
     def _parse_api_event(self, item: dict[str, Any]) -> dict[str, Any] | None:
         """Parse event from WordPress REST API response.
@@ -465,12 +530,13 @@ class ConSaludMentalAdapter(BaseAdapter):
             if description:
                 description = f"🧠 **Evento de salud mental**\n\n{description}"
 
-            # Organizer
+            # Organizer - use extracted name if available
+            organizer_name = raw_data.get("organizer_name") or "Confederación Salud Mental España"
             organizer = EventOrganizer(
-                name="Confederación Salud Mental España",
-                url="https://consaludmental.org",
+                name=organizer_name,
+                url=None,  # No URL for local organizers
                 type="asociacion",
-                logo_url="https://consaludmental.org/wp-content/uploads/2020/02/logo-cyl-color-MEDIA-e1459764840672.jpg",
+                logo_url=None,  # No logo for local organizers
             )
 
             # Determine location type (some events are online)
