@@ -164,7 +164,7 @@ class CategoryClassifier:
         self.fallback_threshold = fallback_threshold
         self.max_categories = max_categories
         # Only these categories are allowed (others map to cultural)
-        self.allowed_categories = {"tecnologia", "sanitaria", "cultural"}
+        self.allowed_categories = {"tecnologia", "sanitaria", "cultural", "politica"}
         self._embeddings_client: EmbeddingsClient | None = None
         self._category_embeddings: dict[str, list[float]] | None = None
 

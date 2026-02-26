@@ -45,6 +45,76 @@ def main():
             "rate_limit_delay": 1.0,
             "batch_size": 50
         },
+        # ---- PRINCIPADO DE ASTURIAS ----
+        {
+            "slug": "oviedo_digital",
+            "name": "Oviedo - Centros Sociales",
+            "source_url": "https://centrosocialvirtualoviedo.es/actividades",
+            "adapter_type": "scraper",
+            "ccaa": "Principado de Asturias",
+            "ccaa_code": "AS",
+            "is_active": True,
+            "rate_limit_delay": 2.0,
+            "batch_size": 50
+        },
+        # ---- GALICIA ----
+        {
+            "slug": "cemit_galicia",
+            "name": "CeMIT Galicia - Formación Presencial",
+            "source_url": "https://cemit.xunta.gal/es/formacion/formacion-presencial",
+            "adapter_type": "scraper",
+            "ccaa": "Galicia",
+            "ccaa_code": "GA",
+            "is_active": True,
+            "rate_limit_delay": 1.0,
+            "batch_size": 50
+        },
+        # ---- ANDALUCÍA ----
+        {
+            "slug": "puntos_vuela",
+            "name": "Puntos Vuela (Guadalinfo) - Actividades",
+            "source_url": "https://puntosvuela.es/actividades",
+            "adapter_type": "scraper",
+            "ccaa": "Andalucía",
+            "ccaa_code": "AN",
+            "is_active": True,
+            "rate_limit_delay": 2.0,
+            "batch_size": 50
+        },
+        # ---- POLÍTICA ----
+        {
+            "slug": "la_moncloa",
+            "name": "Agenda del Gobierno de España - La Moncloa",
+            "source_url": "https://www.lamoncloa.gob.es/gobierno/agenda/Paginas/agenda.aspx",
+            "adapter_type": "scraper",
+            "ccaa": "Comunidad de Madrid",
+            "ccaa_code": "MD",
+            "is_active": True,
+            "rate_limit_delay": 1.0,
+            "batch_size": 50
+        },
+        {
+            "slug": "defensor_pueblo",
+            "name": "Defensor del Pueblo - Calendario de Actividades",
+            "source_url": "https://www.defensordelpueblo.es/agenda-institucional/",
+            "adapter_type": "scraper",
+            "ccaa": "Comunidad de Madrid",
+            "ccaa_code": "MD",
+            "is_active": True,
+            "rate_limit_delay": 1.0,
+            "batch_size": 50
+        },
+        {
+            "slug": "cnt_agenda",
+            "name": "CNT - Confederación Nacional del Trabajo",
+            "source_url": "https://cnt.es/noticias/category/noticias/agenda/",
+            "adapter_type": "scraper",
+            "ccaa": "",
+            "ccaa_code": "",
+            "is_active": True,
+            "rate_limit_delay": 1.0,
+            "batch_size": 50
+        },
     ]
 
     for source in sources:

@@ -1138,6 +1138,60 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         requires_detail_fetch=False,
         max_pages=8,
     ),
+    # ============================================================
+    # POLÍTICA CATEGORY SOURCES (institutional/civic adapters)
+    # ============================================================
+    # ---- LA MONCLOA (Nacional - Government daily agenda) ----
+    BronzeSourceConfig(
+        slug="la_moncloa",
+        name="Agenda del Gobierno de España - La Moncloa",
+        listing_url="https://www.lamoncloa.gob.es/gobierno/agenda/Paginas/agenda.aspx",
+        ccaa="Comunidad de Madrid",
+        ccaa_code="MD",
+        province="Madrid",
+        city="Madrid",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,
+        event_card_selector="",  # Custom structural parsing
+        title_selector="",
+        link_selector="",
+        requires_detail_fetch=False,
+        max_pages=1,
+    ),
+    # ---- DEFENSOR DEL PUEBLO (Nacional - Institutional agenda) ----
+    BronzeSourceConfig(
+        slug="defensor_pueblo",
+        name="Defensor del Pueblo - Calendario de Actividades",
+        listing_url="https://www.defensordelpueblo.es/agenda-institucional/",
+        ccaa="Comunidad de Madrid",
+        ccaa_code="MD",
+        province="Madrid",
+        city="Madrid",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,
+        event_card_selector="",  # Custom parsing from month tabs
+        title_selector="",
+        link_selector="",
+        requires_detail_fetch=False,
+        max_pages=1,
+    ),
+    # ---- CNT AGENDA (Nacional - Sindical/civic events) ----
+    BronzeSourceConfig(
+        slug="cnt_agenda",
+        name="CNT - Confederación Nacional del Trabajo",
+        listing_url="https://cnt.es/noticias/category/noticias/agenda/",
+        ccaa="",  # National scope
+        ccaa_code="",
+        province="",
+        city="",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,
+        event_card_selector="article",
+        title_selector=".entry-title a",
+        link_selector=".entry-title a",
+        requires_detail_fetch=True,
+        max_pages=5,
+    ),
 ]
 
 # Register all Bronze sources
