@@ -1084,6 +1084,60 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         requires_detail_fetch=False,  # API returns full data
         max_pages=1,
     ),
+    # ============================================================
+    # TECNOLOGÍA CATEGORY SOURCES (digital inclusion adapters)
+    # ============================================================
+    # ---- OVIEDO DIGITAL (Asturias - Digital competence courses) ----
+    BronzeSourceConfig(
+        slug="oviedo_digital",
+        name="Oviedo, Ciudadanía Digital",
+        listing_url="https://centrosocialvirtualoviedo.es/actividades",
+        ccaa="Principado de Asturias",
+        ccaa_code="AS",
+        province="Asturias",
+        city="Oviedo",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,
+        event_card_selector="",  # Custom text-based parsing
+        title_selector="",
+        link_selector="",
+        requires_detail_fetch=False,
+        max_pages=1,
+    ),
+    # ---- CEMIT GALICIA (Galicia - Xunta digital training) ----
+    BronzeSourceConfig(
+        slug="cemit_galicia",
+        name="CeMIT Galicia - Formación Presencial",
+        listing_url="https://cemit.xunta.gal/es/formacion/formacion-presencial",
+        ccaa="Galicia",
+        ccaa_code="GA",
+        province="",  # Multiple provinces
+        city="",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,
+        event_card_selector="div.activity",
+        title_selector=".activity-name a",
+        link_selector=".activity-name a",
+        requires_detail_fetch=False,
+        max_pages=6,
+    ),
+    # ---- PUNTOS VUELA (Andalucía - Guadalinfo rebranded) ----
+    BronzeSourceConfig(
+        slug="puntos_vuela",
+        name="Puntos Vuela - Andalucía",
+        listing_url="https://puntosvuela.es/actividades",
+        ccaa="Andalucía",
+        ccaa_code="AN",
+        province="",  # 8 provinces
+        city="",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,
+        event_card_selector="div.card-event",
+        title_selector="h5.card-title",
+        link_selector="a.card-body",
+        requires_detail_fetch=False,
+        max_pages=8,
+    ),
 ]
 
 # Register all Bronze sources

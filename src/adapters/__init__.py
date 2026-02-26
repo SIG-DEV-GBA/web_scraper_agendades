@@ -61,6 +61,9 @@ def _ensure_adapters_loaded() -> None:
     from src.adapters.bronze import vacacionesseniors  # noqa: F401
     from src.adapters.bronze import donarsangre  # noqa: F401
     from src.adapters.bronze import consaludmental  # noqa: F401
+    from src.adapters.bronze import oviedo_digital  # noqa: F401
+    from src.adapters.bronze import cemit_galicia  # noqa: F401
+    from src.adapters.bronze import puntos_vuela  # noqa: F401
     # Bronze tier - Generic scraper (CLM, Asturias, La Rioja, Badajoz, etc.)
     from src.adapters import bronze_scraper_adapter  # noqa: F401
     # Bronze tier - Viralagenda (multiple CCAA)
