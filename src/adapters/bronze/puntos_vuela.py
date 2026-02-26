@@ -379,7 +379,7 @@ class PuntosVuelaAdapter(BaseAdapter):
                 external_url=raw_data.get("detail_url"),
                 external_id=raw_data.get("external_id"),
                 source_id=self.source_id,
-                source_image_url=None,
+                source_image_url=raw_data.get("image_url"),
                 category_slugs=["tecnologia"],
                 organizer=organizer,
                 is_free=True,
