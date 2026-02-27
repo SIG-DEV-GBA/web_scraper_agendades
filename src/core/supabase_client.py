@@ -16,6 +16,9 @@ logger = get_logger(__name__)
 # Calendar IDs - Events are linked to multiple calendars hierarchically
 PUBLIC_CALENDAR_ID = "00000000-0000-0000-0000-000000000001"
 
+# Bot user for audit trail (auth.users)
+SCRAPER_BOT_USER_ID = "f1637f49-d45b-49ee-a493-1e69daceaa9b"
+
 # Official CCAA names from INE API (https://ccaa-provincias-municipios-localida.vercel.app/api/comunidades)
 # Map aliases to official names for consistency in event_locations table
 CCAA_OFFICIAL_NAMES = {
@@ -136,6 +139,28 @@ class SupabaseClient:
         """Force reload of caches."""
         self._categories_cache = None
         self._sources_cache = None
+
+    def _log_audit(
+        self,
+        action: str,
+        entity_type: str,
+        entity_id: str | None = None,
+        entity_name: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        """Write an entry to audit_logs for the scraper bot."""
+        try:
+            self._client.table("audit_logs").insert({
+                "user_id": SCRAPER_BOT_USER_ID,
+                "user_email": "scraper-bot@solidaridadintergeneracional.es",
+                "action": action,
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "entity_name": (entity_name or "")[:200],
+                "details": details,
+            }).execute()
+        except Exception as e:
+            self.logger.warning("audit_log_failed", error=str(e))
 
     # ==========================================
     # Category Operations
@@ -573,6 +598,9 @@ class SupabaseClient:
         if source_uuid:
             data["source_id"] = source_uuid
 
+        # Set bot user for audit trail
+        data["created_by"] = SCRAPER_BOT_USER_ID
+
         return data
 
     # ==========================================
@@ -663,6 +691,15 @@ class SupabaseClient:
             if event.online_url:
                 await self._save_online(event_id, event)
 
+            # Audit log
+            self._log_audit(
+                action="create",
+                entity_type="event",
+                entity_id=event_id,
+                entity_name=event.title,
+                details={"source": event.source_id, "external_id": event.external_id},
+            )
+
             return inserted_event
 
         except Exception as e:
@@ -676,12 +713,23 @@ class SupabaseClient:
             source_uuid = await self.resolve_source_id(event.source_id)
             data = self._prepare_event_data(event, source_uuid=source_uuid)
             data["updated_at"] = datetime.now().isoformat()
+            data["updated_by"] = SCRAPER_BOT_USER_ID
 
             response = (
                 self._client.table("events")
                 .upsert(data, on_conflict="external_id")
                 .execute()
             )
+
+            if response.data:
+                self._log_audit(
+                    action="upsert",
+                    entity_type="event",
+                    entity_id=response.data[0].get("id"),
+                    entity_name=event.title,
+                    details={"source": event.source_id, "external_id": event.external_id},
+                )
+
             return response.data[0] if response.data else None
 
         except Exception as e:
@@ -882,6 +930,7 @@ class SupabaseClient:
             # Only update the fields that changed
             update_data = {k: merged_data[k] for k in fields_to_update if k in merged_data}
             update_data["updated_at"] = "now()"
+            update_data["updated_by"] = SCRAPER_BOT_USER_ID
 
             # Serialize time/date objects to strings for JSON compatibility
             from datetime import date, time
@@ -897,6 +946,16 @@ class SupabaseClient:
                 .eq("id", event_id)
                 .execute()
             )
+
+            if response.data:
+                self._log_audit(
+                    action="update",
+                    entity_type="event",
+                    entity_id=event_id,
+                    entity_name=response.data[0].get("title", ""),
+                    details={"fields_updated": fields_to_update},
+                )
+
             return response.data[0] if response.data else None
         except Exception as e:
             self.logger.error(
