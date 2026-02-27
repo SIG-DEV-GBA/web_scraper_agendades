@@ -1192,6 +1192,57 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         requires_detail_fetch=True,
         max_pages=5,
     ),
+    # ---- SEGIB (Internacional - Iberoamerican cooperation) ----
+    BronzeSourceConfig(
+        slug="segib",
+        name="SEGIB - Secretaría General Iberoamericana",
+        listing_url="https://www.segib.org/sala-de-prensa/",
+        ccaa="",  # International scope
+        ccaa_code="",
+        province="",
+        city="",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,
+        event_card_selector="li.wp-block-post.evento",
+        title_selector="h5 a",
+        link_selector="h5 a",
+        requires_detail_fetch=False,
+        max_pages=5,
+    ),
+    # ---- JGPA (Asturias - Parliamentary calendar) ----
+    BronzeSourceConfig(
+        slug="jgpa",
+        name="Junta General del Principado de Asturias",
+        listing_url="https://www.jgpa.es/calendario-de-actividades",
+        ccaa="Principado de Asturias",
+        ccaa_code="AS",
+        province="Asturias",
+        city="Oviedo",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,
+        event_card_selector="div.calevent-wrapper",
+        title_selector="span.title",
+        link_selector="a.calevent",
+        requires_detail_fetch=False,
+        max_pages=1,
+    ),
+    # ---- HORIZONTE EUROPA (Nacional/UE - Research & innovation) ----
+    BronzeSourceConfig(
+        slug="horizonte_europa",
+        name="Horizonte Europa - Programa europeo de I+D+i",
+        listing_url="https://horizonteeuropa.es/eventos",
+        ccaa="",  # National/EU scope
+        ccaa_code="",
+        province="",
+        city="",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,
+        event_card_selector="div.fila-pagina-eventos",
+        title_selector="div.titulo a",
+        link_selector="div.titulo a",
+        requires_detail_fetch=False,
+        max_pages=5,
+    ),
 ]
 
 # Register all Bronze sources

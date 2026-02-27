@@ -115,6 +115,39 @@ def main():
             "rate_limit_delay": 1.0,
             "batch_size": 50
         },
+        {
+            "slug": "segib",
+            "name": "SEGIB - Secretaría General Iberoamericana",
+            "source_url": "https://www.segib.org/sala-de-prensa/",
+            "adapter_type": "scraper",
+            "ccaa": "",
+            "ccaa_code": "",
+            "is_active": True,
+            "rate_limit_delay": 1.0,
+            "batch_size": 50
+        },
+        {
+            "slug": "jgpa",
+            "name": "Junta General del Principado de Asturias",
+            "source_url": "https://www.jgpa.es/calendario-de-actividades",
+            "adapter_type": "scraper",
+            "ccaa": "Principado de Asturias",
+            "ccaa_code": "AS",
+            "is_active": True,
+            "rate_limit_delay": 1.0,
+            "batch_size": 50
+        },
+        {
+            "slug": "horizonte_europa",
+            "name": "Horizonte Europa - Programa europeo de I+D+i",
+            "source_url": "https://horizonteeuropa.es/eventos",
+            "adapter_type": "scraper",
+            "ccaa": "",
+            "ccaa_code": "",
+            "is_active": True,
+            "rate_limit_delay": 1.0,
+            "batch_size": 50
+        },
     ]
 
     for source in sources:
