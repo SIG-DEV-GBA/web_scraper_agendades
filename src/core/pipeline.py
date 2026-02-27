@@ -536,14 +536,17 @@ class InsertionPipeline:
             raise ValueError(f"Unknown tier: {tier}")
 
     def _parse_and_filter(self, raw_events: list[dict]) -> tuple[list[EventCreate], int]:
-        """Parse raw events and filter past events.
+        """Parse raw events and filter past events + children-only events.
 
         Returns:
             Tuple of (valid events, count of skipped past events)
         """
+        from src.core.category_classifier import is_children_only
+
         today = date.today()
         events = []
         skipped_past = 0
+        skipped_children = 0
 
         for raw in raw_events:
             event = self.adapter.parse_event(raw)
@@ -552,10 +555,28 @@ class InsertionPipeline:
 
             # Check if event is valid (not past)
             is_valid = self._is_future_or_ongoing(event, today)
-            if is_valid:
-                events.append(event)
-            else:
+            if not is_valid:
                 skipped_past += 1
+                continue
+
+            # Check if event is children-only (not relevant for elderly program)
+            if is_children_only(event.title, event.description or ""):
+                logger.debug(
+                    "skipped_children_event",
+                    title=event.title[:60],
+                    source=self.config.source_slug,
+                )
+                skipped_children += 1
+                continue
+
+            events.append(event)
+
+        if skipped_children:
+            logger.info(
+                "children_events_filtered",
+                source=self.config.source_slug,
+                count=skipped_children,
+            )
 
         return events, skipped_past
 
