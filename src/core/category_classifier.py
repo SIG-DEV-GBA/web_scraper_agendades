@@ -165,24 +165,58 @@ CHILDREN_ONLY_PATTERNS = [
     r"\b(?:niños|niñas|niñ@s)\b",
     r"\b(?:bebés|bebeteca)\b",
     r"\bpara\s+(?:niños|niñas|jóvenes|adolescentes|menores)\b",
-    r"\b(?:edad|edades)\s*:?\s*(?:de\s+)?\d+\s*(?:a|-)\s*\d+\s*años\b",
     r"\b(?:sub-?\d{2}|alevín|alevin|benjamín|benjamin|cadete|prebenjamín)\b",
     r"\bcampamento\s+(?:infantil|juvenil|de\s+verano\s+para\s+niños)\b",
     r"\bludoteca\b",
 ]
 _CHILDREN_RE = re.compile("|".join(CHILDREN_ONLY_PATTERNS), re.IGNORECASE)
 
+# Age range regex — extracted separately to check upper bound
+_AGE_RANGE_RE = re.compile(
+    r"\b(?:edad|edades)\s*:?\s*(?:de\s+)?(\d+)\s*(?:a|-)\s*(\d+)\s*años\b",
+    re.IGNORECASE,
+)
+
 # Keywords that indicate the event IS open to adults/seniors even if children are mentioned
 ADULT_INCLUSIVE_PATTERNS = [
     r"\bfamiliar(?:es)?\b",
+    r"\bfamilias\b",
     r"\btodas\s+las\s+edades\b",
     r"\bpúblico\s+general\b",
     r"\bintergeneracional\b",
-    r"\badultos\b",
+    r"\badultos?\b",
     r"\bmayores\b",
     r"\btercera\s+edad\b",
+    r"\bno\s+recomendad[ao]\s+para\s+menores\b",
+    r"\bvíctimas?\b",
+    r"\bcongreso\b",
+    r"\bjornadas?\b",
+    r"\bmasterclass\b",
 ]
 _ADULT_RE = re.compile("|".join(ADULT_INCLUSIVE_PATTERNS), re.IGNORECASE)
+
+# "infantil" used as a topic descriptor, not audience target
+_INFANTIL_TOPIC_RE = re.compile(
+    r"\b(?:literatura|mirada|herida|ilusión|desarrollo|educación|psicología|salud\s+mental)\s+infantil\b",
+    re.IGNORECASE,
+)
+
+# Description of a children-only event — used for embedding verification (layer 2)
+_CHILDREN_EVENT_DESCRIPTION = """
+    Evento exclusivamente para niños, niñas o jóvenes menores de edad.
+    Actividad infantil, taller para niños, ludoteca, cuentacuentos infantil,
+    espectáculo de títeres, teatro infantil, campamento juvenil, juegos para niños,
+    animación infantil, parque infantil, fiesta de cumpleaños, guardería, bebeteca.
+    Actividad educativa escolar, excursión escolar, campeonato sub-12, deporte base.
+    Evento diseñado y dirigido exclusivamente a público menor de edad.
+"""
+
+# Threshold: events below this similarity to _CHILDREN_EVENT_DESCRIPTION
+# are considered false positives (not truly children-only events)
+_CHILDREN_EMBEDDING_THRESHOLD = 0.45
+
+# Cache for the children-event embedding (computed once)
+_children_embedding: list[float] | None = None
 
 
 def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
@@ -200,20 +234,105 @@ def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
     return dot_product / (norm1 * norm2)
 
 
-def is_children_only(title: str, description: str = "") -> bool:
-    """Check if an event is exclusively for children/youth.
+def _get_children_embedding() -> list[float] | None:
+    """Get or compute the children-event reference embedding (cached in memory)."""
+    global _children_embedding
+    if _children_embedding is None:
+        try:
+            client = get_embeddings_client()
+            clean_desc = " ".join(_CHILDREN_EVENT_DESCRIPTION.split())
+            _children_embedding = client.generate(clean_desc)
+        except Exception as e:
+            logger.warning("children_embedding_failed", error=str(e))
+    return _children_embedding
 
-    Returns True only if children-only keywords are found AND no adult-inclusive
-    keywords are present. Events marked as 'familiar' or 'todas las edades'
-    are NOT filtered out.
+
+def _has_children_age_range(text: str) -> bool:
+    """Check if text has an age range targeting only minors (max age <= 17)."""
+    for m in _AGE_RANGE_RE.finditer(text):
+        max_age = int(m.group(2))
+        if max_age <= 17:
+            return True
+    return False
+
+
+def _verify_children_with_embeddings(title: str, description: str) -> bool:
+    """Layer 2: Verify a pattern-flagged event is truly children-only using embeddings.
+
+    Compares the event's embedding against a reference "children-only event"
+    embedding. If the similarity is below threshold, the event is likely a
+    false positive (e.g., a concert mentioning ticket policy for infants,
+    an art piece depicting children, a professional conference about youth).
+
+    Returns True if the event IS confirmed children-only, False if it's
+    likely a false positive.
+    """
+    ref_embedding = _get_children_embedding()
+    if ref_embedding is None:
+        # If embeddings unavailable, trust the pattern match
+        return True
+
+    try:
+        client = get_embeddings_client()
+        event_text = f"{title}. {description[:500]}" if description else title
+        event_embedding = client.generate(event_text)
+
+        if event_embedding is None:
+            return True  # Trust pattern match if embedding fails
+
+        similarity = cosine_similarity(event_embedding, ref_embedding)
+        is_children = similarity >= _CHILDREN_EMBEDDING_THRESHOLD
+
+        logger.debug(
+            "children_embedding_verify",
+            title=title[:60],
+            similarity=round(similarity, 4),
+            confirmed=is_children,
+        )
+
+        return is_children
+
+    except Exception as e:
+        logger.warning("children_verify_error", error=str(e))
+        return True  # Trust pattern match on error
+
+
+def is_children_only(title: str, description: str = "", use_embeddings: bool = True) -> bool:
+    """Check if an event is exclusively for children/youth (2-layer filter).
+
+    Layer 1 (patterns): Fast regex-based check for children keywords.
+    Layer 2 (embeddings): Semantic verification for pattern-flagged events
+    to eliminate false positives (concerts, art, professional conferences).
+
+    Returns True only if both layers agree the event is children-only.
+    Events marked as 'familiar', 'todas las edades', professional events
+    (congreso, jornada), or adult content ratings are NOT filtered out.
     """
     text = f"{title} {description}"
-    if _CHILDREN_RE.search(text):
-        # Has children keywords — but check if also open to adults
-        if _ADULT_RE.search(text):
+
+    # --- Layer 1: Pattern-based filtering ---
+
+    # Check adult-inclusive first — these override everything
+    if _ADULT_RE.search(text):
+        return False
+
+    # Check "infantil" used as topic descriptor (not audience)
+    if _INFANTIL_TOPIC_RE.search(text):
+        cleaned = _INFANTIL_TOPIC_RE.sub("", text)
+        if not _CHILDREN_RE.search(cleaned) and not _has_children_age_range(cleaned):
             return False
-        return True
-    return False
+
+    # Check explicit children patterns or age ranges
+    pattern_flagged = _CHILDREN_RE.search(text) or _has_children_age_range(text)
+
+    if not pattern_flagged:
+        return False
+
+    # --- Layer 2: Embedding verification ---
+    if use_embeddings:
+        return _verify_children_with_embeddings(title, description)
+
+    return True
 
 
 class CategoryClassifier:
