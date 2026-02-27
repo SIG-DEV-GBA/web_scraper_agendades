@@ -1,5 +1,6 @@
 """Supabase client for event storage operations."""
 
+import hashlib
 from datetime import datetime
 from typing import Any
 
@@ -139,6 +140,27 @@ class SupabaseClient:
         """Force reload of caches."""
         self._categories_cache = None
         self._sources_cache = None
+
+    @staticmethod
+    def _compute_content_hash(data: dict[str, Any]) -> str:
+        """Compute a hash of event content fields for change detection.
+
+        Uses title + description + start_date + start_time + end_date + end_time
+        to detect meaningful content changes between scrapes.
+        """
+        parts = [
+            str(data.get("title", "")),
+            str(data.get("description", ""))[:500],
+            str(data.get("start_date", "")),
+            str(data.get("start_time", "")),
+            str(data.get("end_date", "")),
+            str(data.get("end_time", "")),
+            str(data.get("modality", "")),
+            str(data.get("price", "")),
+            str(data.get("external_url", "")),
+        ]
+        raw = "|".join(parts)
+        return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
     def _log_audit(
         self,
@@ -601,6 +623,13 @@ class SupabaseClient:
         # Set bot user for audit trail
         data["created_by"] = SCRAPER_BOT_USER_ID
 
+        # Set content_hash for change detection
+        data["content_hash"] = self._compute_content_hash(data)
+
+        # Set published_at on insert (scraper events are published immediately)
+        if "published_at" not in data or not data.get("published_at"):
+            data["published_at"] = datetime.now().isoformat()
+
         return data
 
     # ==========================================
@@ -713,7 +742,6 @@ class SupabaseClient:
             source_uuid = await self.resolve_source_id(event.source_id)
             data = self._prepare_event_data(event, source_uuid=source_uuid)
             data["updated_at"] = datetime.now().isoformat()
-            data["updated_by"] = SCRAPER_BOT_USER_ID
 
             response = (
                 self._client.table("events")
@@ -760,6 +788,23 @@ class SupabaseClient:
         )
         return {row["external_id"] for row in response.data}
 
+    async def get_existing_content_hashes(self, external_ids: list[str]) -> dict[str, str]:
+        """Get map of external_id -> content_hash for existing events."""
+        if not external_ids:
+            return {}
+
+        response = (
+            self._client.table("events")
+            .select("external_id,content_hash")
+            .in_("external_id", external_ids)
+            .execute()
+        )
+        return {
+            row["external_id"]: row.get("content_hash", "")
+            for row in response.data
+            if row.get("content_hash")
+        }
+
     # ==========================================
     # Batch Operations
     # ==========================================
@@ -794,6 +839,9 @@ class SupabaseClient:
         all_ids = [e.external_id for e in batch.events if e.external_id]
         existing_ids = await self.get_existing_external_ids(all_ids) if all_ids else set()
 
+        # Get content hashes for existing events (for change detection)
+        existing_hashes = await self.get_existing_content_hashes(all_ids) if all_ids else {}
+
         # Initialize cross-source deduplicator if enabled
         deduplicator = None
         if cross_source_dedup:
@@ -803,6 +851,20 @@ class SupabaseClient:
         for event in batch.events:
             # Skip existing from same source if configured
             if skip_existing and event.external_id in existing_ids:
+                # Check content_hash: if content unchanged, truly skip
+                if event.external_id in existing_hashes:
+                    source_uuid = await self.resolve_source_id(event.source_id)
+                    new_data = self._prepare_event_data(event, source_uuid=source_uuid)
+                    new_hash = new_data.get("content_hash", "")
+                    old_hash = existing_hashes.get(event.external_id, "")
+                    if new_hash and old_hash and new_hash != old_hash:
+                        # Content changed — upsert instead of skip
+                        result = await self.upsert_event(event)
+                        if result:
+                            stats["updated"] += 1
+                        else:
+                            stats["failed"] += 1
+                        continue
                 stats["skipped"] += 1
                 continue
 
@@ -930,7 +992,6 @@ class SupabaseClient:
             # Only update the fields that changed
             update_data = {k: merged_data[k] for k in fields_to_update if k in merged_data}
             update_data["updated_at"] = "now()"
-            update_data["updated_by"] = SCRAPER_BOT_USER_ID
 
             # Serialize time/date objects to strings for JSON compatibility
             from datetime import date, time
