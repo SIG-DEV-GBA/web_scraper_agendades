@@ -4,15 +4,24 @@ This module provides semantic classification of events using:
 1. Pre-computed category embeddings for fast similarity matching
 2. LLM fallback for ambiguous cases
 
+Categories are aligned with the Agendades social program for elderly inclusion:
+- cultural: Participación Cultural (arte, música, teatro, literatura, deporte)
+- economica: Participación Económica (empleo, formación, emprendimiento, finanzas)
+- politica: Participación Política (derechos cívicos, gobierno, instituciones)
+- social: Participación Social (comunidad, voluntariado, fiestas, solidaridad)
+- tecnologia: Participación Tecnológica (digital, informática, brecha digital)
+- sanitaria: Participación Sanitaria (salud, bienestar, prevención, apoyo mutuo)
+
 Flow:
 1. LLM normalizes raw text → clean, contextual description
 2. Generate embedding of normalized text
 3. Compare with category embeddings via cosine similarity
-4. Assign top categories above confidence threshold
+4. Assign best matching category above confidence threshold
 """
 
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -27,13 +36,19 @@ CATEGORY_EMBEDDINGS_CACHE = CACHE_DIR / "category_embeddings.json"
 
 
 # ============================================================
-# CATEGORY DEFINITIONS - Rich descriptions for better embeddings
+# CATEGORY DEFINITIONS
+# Aligned with Agendades program for elderly inclusion.
+# Descriptions from CATEGORIAS_INDICACIONES.md enriched with
+# concrete examples for better embedding matching.
 # ============================================================
 
 CATEGORY_DESCRIPTIONS = {
     "cultural": """
-        Eventos artísticos, entretenimiento y espectáculos.
-        Incluye: conciertos de música clásica, jazz, rock, pop, indie.
+        Participación Cultural: involucrarse en actividades y expresiones culturales
+        que enriquecen la vida y favorecen la interacción con otras personas,
+        sin que la edad importe. Mejora la calidad de vida, mantiene la mente activa,
+        promueve la creatividad y fortalece la identidad social.
+        Incluye: conciertos de música clásica, jazz, rock, pop, folk, indie.
         Teatro, obras dramáticas, comedias, musicales, monólogos, stand-up.
         Danza contemporánea, ballet, flamenco, danza urbana.
         Cine, proyecciones, festivales de cine, documentales, estrenos.
@@ -41,92 +56,133 @@ CATEGORY_DESCRIPTIONS = {
         Museos, galerías de arte, instalaciones artísticas.
         Literatura, presentaciones de libros, lecturas poéticas, clubs de lectura.
         Ópera, zarzuela, recitales líricos.
-        Festivales culturales, semanas culturales.
-        Eventos deportivos: fútbol, baloncesto, boxeo, MMA, artes marciales.
-        Carreras populares, maratones, trails, ciclismo, triatlón.
-        Torneos, competiciones deportivas, partidos, ligas.
-        Esports, torneos de videojuegos.
-        Espectáculos en general que no encajen en otras categorías.
+        Festivales culturales, semanas culturales, jornadas de puertas abiertas.
+        Eventos deportivos para disfrutar: fútbol, baloncesto, atletismo.
+        Carreras populares, maratones, paseos, rutas senderismo.
+        Talleres artísticos, manualidades, cerámica, pintura.
+        Visitas guiadas, excursiones culturales, rutas turísticas.
+        Espectáculos, circo, magia, humor.
     """,
 
     "social": """
-        Eventos comunitarios, encuentros sociales y fiestas populares.
+        Participación Social: involucrarse en la vida comunitaria y asociativa
+        que enriquece las relaciones personales y favorece el sentido de pertenencia,
+        sin que la edad sea una barrera. Mejora la calidad de vida, combate la soledad,
+        promueve la solidaridad y fortalece el tejido social para una vida más plena.
         Incluye: fiestas patronales, romerías, verbenas, ferias populares.
-        Carnavales, comparsas, murgas, desfiles de disfraces.
-        Semana Santa, procesiones religiosas, festividades católicas.
-        Encuentros vecinales, reuniones de barrio, asambleas ciudadanas.
-        Actividades para la tercera edad, jubilados, mayores.
+        Carnavales, comparsas, desfiles, cabalgatas.
+        Encuentros vecinales, reuniones de barrio, asociaciones de vecinos.
+        Actividades para la tercera edad, jubilados, mayores, centros de día.
         Voluntariado, acciones solidarias, ONGs, bancos de alimentos.
         Mercadillos solidarios, rastros benéficos.
         Fiestas tradicionales, costumbres locales, folklore.
-        Cabalgatas, desfiles cívicos, actos conmemorativos.
-        Comidas populares, calçotadas, sardinadas, paellas gigantes.
-        NO incluye: competiciones deportivas, cursos profesionales.
+        Comidas populares, calçotadas, sardinadas, paellas.
+        Semana Santa, procesiones, festividades religiosas.
+        Convivencias intergeneracionales, intercambio de experiencias.
+        Grupos de apoyo, tertulias, cafés sociales.
+        Actividades contra la soledad no deseada.
     """,
 
     "economica": """
-        Eventos relacionados con empleo, negocios, formación profesional y cursos con certificación.
-        Incluye: ferias de empleo, bolsas de trabajo, job fairs.
+        Participación Económica: defender derechos económicos, acceder al empleo
+        y emprendimiento, formarse financieramente y gestionar recursos con autonomía.
+        Reivindicar pensiones dignas, aportar experiencia al mercado laboral y ser
+        parte activa de una economía que reconoce y valora la contribución.
+        Incluye: ferias de empleo, bolsas de trabajo, orientación laboral.
         Cursos de emprendimiento, startups, incubadoras.
-        Networking empresarial, B2B, encuentros profesionales.
-        Formación profesional, cursos técnicos, certificaciones, carnets profesionales.
+        Networking empresarial, encuentros profesionales.
+        Formación profesional, cursos técnicos, certificaciones.
         Cursos de manipulador de alimentos, PRL, prevención de riesgos.
-        Cursos de hostelería, cocina profesional, camarero.
-        Carnet de carretillero, operador de maquinaria.
-        Ferias comerciales, exposiciones de productos, stands.
+        Ferias comerciales, exposiciones de productos.
         Conferencias de negocios, congresos empresariales.
         Talleres de marketing, ventas, gestión empresarial.
-        Charlas sobre finanzas personales, inversiones.
+        Charlas sobre finanzas personales, inversiones, pensiones.
         Eventos de cámaras de comercio, asociaciones empresariales.
-        Cualquier curso que otorgue certificación profesional o habilitación laboral.
+        Economía social, cooperativas, comercio justo.
+        Asesoramiento fiscal, legal, derechos del consumidor.
     """,
 
     "politica": """
-        Eventos de participación ciudadana y actividad política.
-        Incluye: plenos municipales, sesiones del ayuntamiento.
+        Participación Política: ejercer derechos y deberes cívicos, influir en
+        las decisiones colectivas y exigir responsabilidad a quienes gobiernan.
+        Participar amplifica tu voz, promueve cambios sociales y construye
+        instituciones más legítimas, transparentes y orientadas al interés general.
+        Incluye: plenos municipales, sesiones del ayuntamiento, parlamento.
         Debates políticos, mítines, actos de campaña electoral.
         Presupuestos participativos, consultas ciudadanas.
         Asambleas vecinales con temática política.
         Conferencias sobre política, geopolítica, relaciones internacionales.
-        Presentaciones de programas electorales.
         Actos institucionales de gobiernos y administraciones.
-        Manifestaciones, protestas cívicas (pacíficas).
-    """,
-
-    "sanitaria": """
-        Eventos de salud, bienestar personal y calidad de vida.
-        Incluye: clases de yoga, pilates, tai chi, meditación.
-        Mindfulness, relajación, gestión del estrés.
-        Charlas de salud, prevención de enfermedades.
-        Campañas de vacunación, donación de sangre.
-        Talleres de nutrición, alimentación saludable, dietas.
-        Salud mental, bienestar emocional, psicología.
-        Fitness recreativo orientado a salud (no competitivo): zumba, aerobic, spinning.
-        Primeros auxilios, RCP, cursos de emergencias (no profesionales).
-        Jornadas médicas, charlas de doctores.
-        Terapias alternativas, acupuntura, naturopatía, reiki.
-        NO incluye: boxeo, MMA, artes marciales competitivas, veladas deportivas.
-        NO incluye: maratones, carreras, trails, competiciones deportivas.
-        NO incluye: cursos con certificación profesional (eso es economica).
+        Manifestaciones, protestas cívicas pacíficas.
+        Consejos de mayores, órganos de participación ciudadana.
+        Jornadas sobre derechos civiles, igualdad, justicia social.
+        Agenda gubernamental, comisiones parlamentarias.
     """,
 
     "tecnologia": """
-        Eventos de tecnología, innovación y mundo digital.
-        Incluye: talleres de programación, coding, desarrollo web.
-        Charlas sobre inteligencia artificial, machine learning, IA.
-        Blockchain, criptomonedas, web3, NFTs.
-        Robótica, makers, Arduino, Raspberry Pi, electrónica.
-        Videojuegos, gaming, cultura gamer.
-        Hackathons, maratones de programación.
-        Ciberseguridad, hacking ético, privacidad digital.
-        Alfabetización digital, cursos de informática básica.
-        Realidad virtual, realidad aumentada, metaverso.
-        Startups tecnológicas, demos de productos tech.
+        Participación Tecnológica: acceder al mundo digital con seguridad y autonomía,
+        comunicarse sin límites, aprender nuevas herramientas y formar parte activa
+        de una sociedad conectada, superando la brecha digital.
+        Va más allá de usar un móvil: es inclusión digital para personas mayores.
+        Incluye: talleres de informática básica, uso de ordenador, tablet, móvil.
+        Cursos de internet, navegación web, correo electrónico.
+        Redes sociales, WhatsApp, videollamadas, Skype, Zoom.
+        Administración electrónica, sede electrónica, cita previa online.
+        Banca online, compras por internet, seguridad digital.
+        Talleres de programación, coding, desarrollo web.
+        Inteligencia artificial, robótica, impresión 3D.
+        Ciberseguridad, privacidad digital, protección de datos.
+        Alfabetización digital, reducción de la brecha digital.
+        Hackathons, eventos maker, Arduino, Raspberry Pi.
+    """,
+
+    "sanitaria": """
+        Participación Sanitaria: conocer tus derechos como paciente, involucrarte
+        en el cuidado de tu propia salud, compartir experiencias en grupos de apoyo
+        mutuo, formarte en prevención y hábitos saludables y contribuir como
+        voluntario al bienestar de otros. Ser protagonista de tu salud y parte
+        activa de una comunidad que cuida y se cuida.
+        Incluye: clases de yoga, pilates, tai chi, meditación, mindfulness.
+        Charlas de salud, prevención de enfermedades, jornadas médicas.
+        Campañas de vacunación, donación de sangre.
+        Talleres de nutrición, alimentación saludable.
+        Salud mental, bienestar emocional, psicología, grupos de apoyo.
+        Ejercicio físico saludable: gimnasia suave, paseos, aquagym.
+        Primeros auxilios, RCP, cursos de emergencias.
+        Terapias alternativas, acupuntura, naturopatía.
+        Charlas sobre envejecimiento activo, autonomía personal.
+        Jornadas de detección precoz, revisiones, chequeos.
     """,
 }
 
 # Default category when no good match is found
 DEFAULT_CATEGORY = "cultural"
+
+# Keywords that indicate children/youth-only events (to filter out)
+CHILDREN_ONLY_PATTERNS = [
+    r"\b(?:infantil|infantiles)\b",
+    r"\b(?:juvenil|juveniles)\b",
+    r"\b(?:niños|niñas|niñ@s)\b",
+    r"\b(?:bebés|bebeteca)\b",
+    r"\bpara\s+(?:niños|niñas|jóvenes|adolescentes|menores)\b",
+    r"\b(?:edad|edades)\s*:?\s*(?:de\s+)?\d+\s*(?:a|-)\s*\d+\s*años\b",
+    r"\b(?:sub-?\d{2}|alevín|alevin|benjamín|benjamin|cadete|prebenjamín)\b",
+    r"\bcampamento\s+(?:infantil|juvenil|de\s+verano\s+para\s+niños)\b",
+    r"\bludoteca\b",
+]
+_CHILDREN_RE = re.compile("|".join(CHILDREN_ONLY_PATTERNS), re.IGNORECASE)
+
+# Keywords that indicate the event IS open to adults/seniors even if children are mentioned
+ADULT_INCLUSIVE_PATTERNS = [
+    r"\bfamiliar(?:es)?\b",
+    r"\btodas\s+las\s+edades\b",
+    r"\bpúblico\s+general\b",
+    r"\bintergeneracional\b",
+    r"\badultos\b",
+    r"\bmayores\b",
+    r"\btercera\s+edad\b",
+]
+_ADULT_RE = re.compile("|".join(ADULT_INCLUSIVE_PATTERNS), re.IGNORECASE)
 
 
 def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
@@ -144,14 +200,30 @@ def cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
     return dot_product / (norm1 * norm2)
 
 
+def is_children_only(title: str, description: str = "") -> bool:
+    """Check if an event is exclusively for children/youth.
+
+    Returns True only if children-only keywords are found AND no adult-inclusive
+    keywords are present. Events marked as 'familiar' or 'todas las edades'
+    are NOT filtered out.
+    """
+    text = f"{title} {description}"
+    if _CHILDREN_RE.search(text):
+        # Has children keywords — but check if also open to adults
+        if _ADULT_RE.search(text):
+            return False
+        return True
+    return False
+
+
 class CategoryClassifier:
     """Hybrid category classifier using embeddings + optional LLM fallback."""
 
     def __init__(
         self,
-        confidence_threshold: float = 0.50,
-        fallback_threshold: float = 0.48,
-        max_categories: int = 1,  # Changed: only 1 category per event
+        confidence_threshold: float = 0.48,
+        fallback_threshold: float = 0.42,
+        max_categories: int = 1,
     ) -> None:
         """Initialize classifier.
 
@@ -163,8 +235,9 @@ class CategoryClassifier:
         self.confidence_threshold = confidence_threshold
         self.fallback_threshold = fallback_threshold
         self.max_categories = max_categories
-        # Only these categories are allowed (others map to cultural)
-        self.allowed_categories = {"tecnologia", "sanitaria", "cultural", "politica"}
+        self.allowed_categories = {
+            "cultural", "social", "economica", "politica", "tecnologia", "sanitaria",
+        }
         self._embeddings_client: EmbeddingsClient | None = None
         self._category_embeddings: dict[str, list[float]] | None = None
 
@@ -189,8 +262,14 @@ class CategoryClassifier:
             try:
                 with open(CATEGORY_EMBEDDINGS_CACHE, "r", encoding="utf-8") as f:
                     cached = json.load(f)
-                    logger.info("category_embeddings_loaded", count=len(cached))
-                    return cached
+                    # Verify cache has all 6 categories
+                    if set(cached.keys()) == set(CATEGORY_DESCRIPTIONS.keys()):
+                        logger.info("category_embeddings_loaded", count=len(cached))
+                        return cached
+                    else:
+                        logger.info("cache_stale_recomputing",
+                                    cached=list(cached.keys()),
+                                    expected=list(CATEGORY_DESCRIPTIONS.keys()))
             except Exception as e:
                 logger.warning("cache_load_error", error=str(e))
 
@@ -225,6 +304,9 @@ class CategoryClassifier:
     ) -> tuple[list[str], dict[str, float]]:
         """Classify text into categories using embedding similarity.
 
+        Compares all 6 categories and picks the best match above threshold.
+        Falls back to 'cultural' if no category is confident enough.
+
         Args:
             text: Normalized/clean text to classify (from LLM)
             title: Optional title for additional context
@@ -233,10 +315,7 @@ class CategoryClassifier:
             Tuple of (category_slugs, similarity_scores)
         """
         # Combine title + text for richer embedding
-        if title:
-            full_text = f"{title}. {text}"
-        else:
-            full_text = text
+        full_text = f"{title}. {text}" if title else text
 
         # Generate embedding for input text
         event_embedding = self.embeddings_client.generate(full_text[:2000])
@@ -254,25 +333,32 @@ class CategoryClassifier:
         # Sort by similarity (descending)
         sorted_categories = sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
-        # Simplified logic: only allow tecnologia, sanitaria, or cultural
-        # Check if tecnologia or sanitaria is above threshold
-        selected = []
-        for slug in ["tecnologia", "sanitaria"]:
-            if slug in scores and scores[slug] >= self.confidence_threshold:
-                selected = [slug]
-                logger.info(
-                    "category_special_detected",
-                    category=slug,
-                    score=scores[slug],
-                )
-                break
+        if not sorted_categories:
+            return [DEFAULT_CATEGORY], scores
 
-        # If no special category detected, default to cultural
-        if not selected:
-            selected = [DEFAULT_CATEGORY]
-            best_slug, best_score = sorted_categories[0] if sorted_categories else ("", 0)
+        best_slug, best_score = sorted_categories[0]
+
+        # Pick the best category if above confidence threshold
+        if best_score >= self.confidence_threshold:
+            selected = [best_slug]
             logger.debug(
-                "category_default_cultural",
+                "category_confident",
+                category=best_slug,
+                score=best_score,
+            )
+        elif best_score >= self.fallback_threshold:
+            # Marginal confidence — use it but log warning
+            selected = [best_slug]
+            logger.debug(
+                "category_marginal",
+                category=best_slug,
+                score=best_score,
+            )
+        else:
+            # Below fallback threshold — default to cultural
+            selected = [DEFAULT_CATEGORY]
+            logger.debug(
+                "category_default",
                 original_best=(best_slug, best_score),
             )
 
