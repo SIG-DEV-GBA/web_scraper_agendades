@@ -489,11 +489,11 @@ class PreviewResponse(BaseModel):
 
 
 @router.get("/preview/{source_slug}", response_model=PreviewResponse)
-async def preview_source(source_slug: str):
+async def preview_source(source_slug: str, limit: int | None = None):
     """Preview how many valid events a source has without inserting.
 
     Fetches and parses events from the source to show the count
-    of valid events that would be scraped.
+    of valid events that would be scraped. Use ?limit=N to cap events.
     """
     from src.core.pipeline import InsertionPipeline, PipelineConfig
 
@@ -507,7 +507,7 @@ async def preview_source(source_slug: str):
         # Skip details, enrichment, images for fast preview
         pipeline_config = PipelineConfig(
             source_slug=source_slug,
-            limit=None,  # No limit - get full count
+            limit=limit,
             fetch_details=False,  # Skip detail pages for speed
             skip_enrichment=True,  # Skip LLM to be fast
             skip_images=True,  # Skip images to be fast
