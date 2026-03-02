@@ -256,13 +256,13 @@ class FirecrawlClient:
 
         try:
             client = await self._get_client()
-            # Try /scrape first (older/self-hosted), fallback to /v1/scrape (cloud)
-            scrape_url = f"{self.base_url}/scrape"
+            # Try /v1/scrape first (standard API), fallback to /scrape (legacy)
+            scrape_url = f"{self.base_url}/v1/scrape"
             response = await client.post(scrape_url, json=payload)
 
-            # If /scrape returns 404, try /v1/scrape (cloud API)
+            # If /v1/scrape returns 404, try /scrape (legacy endpoint)
             if response.status_code == 404:
-                scrape_url = f"{self.base_url}/v1/scrape"
+                scrape_url = f"{self.base_url}/scrape"
                 response = await client.post(scrape_url, json=payload)
 
             if response.status_code == 429:

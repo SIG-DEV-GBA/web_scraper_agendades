@@ -5,15 +5,15 @@ This base adapter handles the common scraping logic.
 """
 
 import asyncio
+import os
 import random
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from typing import Any
 
-import requests
+import httpx
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
 
 from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
@@ -186,7 +186,7 @@ def _register_viralagenda_sources():
         url_path="canarias/santa-cruz-de-tenerife",
     )
 
-    # ---- EXTREMADURA (1 province via Viralagenda - Cáceres) ----
+    # ---- EXTREMADURA ----
     VIRALAGENDA_SOURCES["viralagenda_caceres"] = ViralAgendaConfig(
         slug="viralagenda_caceres",
         name="Viral Agenda - Cáceres",
@@ -194,6 +194,14 @@ def _register_viralagenda_sources():
         ccaa="Extremadura",
         ccaa_code="EX",
         url_path="extremadura/caceres/caceres",
+    )
+    VIRALAGENDA_SOURCES["viralagenda_badajoz"] = ViralAgendaConfig(
+        slug="viralagenda_badajoz",
+        name="Viral Agenda - Badajoz",
+        province="Badajoz",
+        ccaa="Extremadura",
+        ccaa_code="EX",
+        url_path="extremadura/badajoz",
     )
 
     # ---- UNIPROVINCIALES ----
@@ -237,6 +245,74 @@ def _register_viralagenda_sources():
         url_path="navarra",
     )
 
+    # ---- ARAGÓN (3 provinces) ----
+    aragon_provinces = [
+        ("huesca", "Huesca"),
+        ("teruel", "Teruel"),
+        ("zaragoza", "Zaragoza"),
+    ]
+    for slug_suffix, province in aragon_provinces:
+        VIRALAGENDA_SOURCES[f"viralagenda_{slug_suffix}"] = ViralAgendaConfig(
+            slug=f"viralagenda_{slug_suffix}",
+            name=f"Viral Agenda - {province}",
+            province=province,
+            ccaa="Aragón",
+            ccaa_code="AR",
+            url_path=f"aragon/{slug_suffix}",
+        )
+
+    # ---- CATALUÑA (4 provinces) ----
+    cat_provinces = [
+        ("barcelona", "Barcelona"),
+        ("girona", "Girona"),
+        ("lleida", "Lleida"),
+        ("tarragona", "Tarragona"),
+    ]
+    for slug_suffix, province in cat_provinces:
+        VIRALAGENDA_SOURCES[f"viralagenda_{slug_suffix}"] = ViralAgendaConfig(
+            slug=f"viralagenda_{slug_suffix}",
+            name=f"Viral Agenda - {province}",
+            province=province,
+            ccaa="Cataluña",
+            ccaa_code="CT",
+            url_path=f"catalunya/{slug_suffix}",  # Note: "catalunya" not "cataluna"
+        )
+
+    # ---- COMUNITAT VALENCIANA (1 province — Alicante/Castellón not on viralagenda) ----
+    VIRALAGENDA_SOURCES["viralagenda_valencia"] = ViralAgendaConfig(
+        slug="viralagenda_valencia",
+        name="Viral Agenda - Valencia",
+        province="Valencia",
+        ccaa="Comunitat Valenciana",
+        ccaa_code="VC",
+        url_path="comunitat-valenciana/valencia",
+    )
+
+    # ---- PAÍS VASCO (2 provinces — Araba not on viralagenda) ----
+    pv_provinces = [
+        ("bizkaia", "Bizkaia", "bizkaia"),
+        ("gipuzkoa", "Gipuzkoa", "gipuzkoa"),
+    ]
+    for slug_suffix, province, url_suffix in pv_provinces:
+        VIRALAGENDA_SOURCES[f"viralagenda_{slug_suffix}"] = ViralAgendaConfig(
+            slug=f"viralagenda_{slug_suffix}",
+            name=f"Viral Agenda - {province}",
+            province=province,
+            ccaa="País Vasco",
+            ccaa_code="PV",
+            url_path=f"pais-vasco/{url_suffix}",
+        )
+
+    # Madrid
+    VIRALAGENDA_SOURCES["viralagenda_madrid"] = ViralAgendaConfig(
+        slug="viralagenda_madrid",
+        name="Viral Agenda - Madrid",
+        province="Madrid",
+        ccaa="Comunidad de Madrid",
+        ccaa_code="MD",
+        url_path="madrid",
+    )
+
 
 # Initialize sources
 _register_viralagenda_sources()
@@ -262,7 +338,7 @@ class ViralAgendaAdapter(BaseAdapter):
     tier = "bronze"
 
     # Firecrawl config
-    FIRECRAWL_URL = "https://firecrawl.si-erp.cloud/scrape"
+    FIRECRAWL_URL = os.getenv("FIRECRAWL_URL", "https://firecrawl.si-erp.cloud")
     BASE_URL = "https://www.viralagenda.com"
 
     # CSS Selectors (consistent across all provinces)
@@ -296,79 +372,56 @@ class ViralAgendaAdapter(BaseAdapter):
 
         super().__init__(*args, **kwargs)
 
-    async def _fetch_with_playwright(self, limit: int | None = None) -> str:
-        """Fetch listing page using Playwright with infinite scroll support.
+    async def _fetch_listing_html(self, limit: int | None = None) -> str:
+        """Fetch listing page using Firecrawl (remote JS rendering).
 
         Args:
-            limit: Target number of events (scrolls until reached or no more load)
+            limit: Target number of events (not used for scroll - Firecrawl
+                   returns initial page load only, ~20 events)
 
         Returns:
-            HTML content of the page after scrolling
+            HTML content of the page after JS rendering
         """
-        # Calculate how many scrolls we need (each loads ~20 events)
-        max_scrolls = 10  # Default max
-        if limit:
-            max_scrolls = min((limit // 20) + 2, 15)  # +2 buffer, max 15 scrolls
+        self.logger.info(
+            "firecrawl_loading",
+            source=self.source_id,
+            url=self.source_url,
+        )
 
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            try:
-                page = await browser.new_page()
-                await page.set_viewport_size({"width": 1920, "height": 1080})
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0)) as client:
+            response = await client.post(
+                f"{self.FIRECRAWL_URL}/v1/scrape",
+                json={
+                    "url": self.source_url,
+                    "formats": ["html"],
+                    "timeout": 30000,
+                    "waitFor": 5000,
+                },
+            )
 
-                self.logger.info(
-                    "playwright_loading",
+            if response.status_code != 200:
+                self.logger.error(
+                    "firecrawl_listing_error",
                     source=self.source_id,
-                    url=self.source_url,
+                    status=response.status_code,
                 )
+                return ""
 
-                await page.goto(self.source_url, wait_until="networkidle")
-
-                # Scroll loop - scroll to last card to trigger infinite scroll
-                prev_count = 0
-                for i in range(max_scrolls):
-                    cards = await page.query_selector_all(self.EVENT_CARD_SELECTOR)
-                    count = len(cards)
-
-                    self.logger.debug(
-                        "playwright_scroll",
-                        source=self.source_id,
-                        scroll=i,
-                        cards=count,
-                    )
-
-                    # Stop if no more cards loading
-                    if count == prev_count:
-                        self.logger.info(
-                            "playwright_scroll_complete",
-                            source=self.source_id,
-                            total_cards=count,
-                            scrolls=i,
-                        )
-                        break
-
-                    # Stop if we have enough cards
-                    if limit and count >= limit:
-                        self.logger.info(
-                            "playwright_limit_reached",
-                            source=self.source_id,
-                            cards=count,
-                            limit=limit,
-                        )
-                        break
-
-                    prev_count = count
-
-                    # Scroll to last card to trigger lazy loading
-                    if cards:
-                        await cards[-1].scroll_into_view_if_needed()
-                        await asyncio.sleep(2)  # Wait for content to load
-
-                html = await page.content()
+            data = response.json()
+            if data.get("success") and data.get("data"):
+                html = data["data"].get("html", "")
+                self.logger.info(
+                    "firecrawl_listing_ok",
+                    source=self.source_id,
+                    html_length=len(html),
+                )
                 return html
 
-            finally:
-                await browser.close()
+            self.logger.warning(
+                "firecrawl_listing_no_data",
+                source=self.source_id,
+            )
+            return ""
 
     async def fetch_events(
         self,
@@ -396,10 +449,10 @@ class ViralAgendaAdapter(BaseAdapter):
                 url=self.source_url,
             )
 
-            html = await self._fetch_with_playwright(limit=limit)
+            html = await self._fetch_listing_html(limit=limit)
 
             if not html:
-                self.logger.warning("playwright_empty_response", source=self.source_id)
+                self.logger.warning("firecrawl_empty_response", source=self.source_id)
                 return []
 
             # Parse listing
@@ -475,10 +528,10 @@ class ViralAgendaAdapter(BaseAdapter):
                 url=self.source_url,
             )
 
-            html = await self._fetch_with_playwright(limit=limit)
+            html = await self._fetch_listing_html(limit=limit)
 
             if not html:
-                self.logger.warning("playwright_empty_response", source=self.source_id)
+                self.logger.warning("firecrawl_empty_response", source=self.source_id)
                 return
 
             # Parse all cards from listing
@@ -695,69 +748,70 @@ class ViralAgendaAdapter(BaseAdapter):
         return f"{self.source_id}_{hash_val}"
 
     async def _fetch_details(self, events: list[dict[str, Any]]) -> None:
-        """Fetch detail pages to get descriptions."""
-        for i, event in enumerate(events):
-            detail_url = event.get("detail_url")
-            if not detail_url:
-                continue
+        """Fetch detail pages to get descriptions via Firecrawl."""
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0)) as client:
+            for i, event in enumerate(events):
+                detail_url = event.get("detail_url")
+                if not detail_url:
+                    continue
 
-            # Anti-blocking delay between each detail request (2-5 seconds)
-            if i > 0:
-                delay = random.uniform(2, 5)
-                self.logger.debug(
-                    "detail_fetch_delay",
-                    source=self.source_id,
-                    event_index=i,
-                    delay_seconds=round(delay, 1),
-                )
-                await asyncio.sleep(delay)
-
-            try:
-                # Use Firecrawl for detail page too (JS-rendered)
-                response = requests.post(
-                    self.FIRECRAWL_URL,
-                    json={
-                        "url": detail_url,
-                        "formats": ["html"],
-                        "timeout": 30000,
-                        "waitFor": 2000,
-                    },
-                    timeout=60,
-                )
-
-                if response.status_code == 200:
-                    data = response.json()
-                    html = data.get("content") or data.get("html", "")
-
-                    if html:
-                        details = self._parse_detail_page(html, detail_url)
-                        event.update(details)
-                elif response.status_code in (403, 429, 500):
-                    # Rate limited or blocked - longer backoff
-                    backoff = random.uniform(10, 20)
-                    self.logger.warning(
-                        "detail_fetch_blocked",
+                # Anti-blocking delay between each detail request (2-5 seconds)
+                if i > 0:
+                    delay = random.uniform(2, 5)
+                    self.logger.debug(
+                        "detail_fetch_delay",
                         source=self.source_id,
-                        status=response.status_code,
-                        backoff_seconds=round(backoff, 1),
+                        event_index=i,
+                        delay_seconds=round(delay, 1),
                     )
-                    await asyncio.sleep(backoff)
+                    await asyncio.sleep(delay)
 
-                if (i + 1) % 5 == 0:
-                    self.logger.info(
-                        "detail_fetch_progress",
-                        fetched=i + 1,
-                        total=len(events),
+                try:
+                    response = await client.post(
+                        f"{self.FIRECRAWL_URL}/v1/scrape",
+                        json={
+                            "url": detail_url,
+                            "formats": ["html"],
+                            "timeout": 30000,
+                            "waitFor": 2000,
+                        },
                     )
 
-            except Exception as e:
-                self.logger.warning(
-                    "detail_fetch_error",
-                    url=detail_url,
-                    error=str(e),
-                )
-                # Extra delay after error (potential rate limit)
-                await asyncio.sleep(random.uniform(5, 10))
+                    if response.status_code == 200:
+                        data = response.json()
+                        # Firecrawl v1 format: {"success": true, "data": {"html": "..."}}
+                        if data.get("success") and data.get("data"):
+                            html = data["data"].get("html", "")
+                        else:
+                            html = data.get("content") or data.get("html", "")
+
+                        if html:
+                            details = self._parse_detail_page(html, detail_url)
+                            event.update(details)
+                    elif response.status_code in (403, 429, 500):
+                        backoff = random.uniform(10, 20)
+                        self.logger.warning(
+                            "detail_fetch_blocked",
+                            source=self.source_id,
+                            status=response.status_code,
+                            backoff_seconds=round(backoff, 1),
+                        )
+                        await asyncio.sleep(backoff)
+
+                    if (i + 1) % 5 == 0:
+                        self.logger.info(
+                            "detail_fetch_progress",
+                            fetched=i + 1,
+                            total=len(events),
+                        )
+
+                except Exception as e:
+                    self.logger.warning(
+                        "detail_fetch_error",
+                        url=detail_url,
+                        error=str(e),
+                    )
+                    await asyncio.sleep(random.uniform(5, 10))
 
         self.logger.info(
             "detail_fetch_complete",

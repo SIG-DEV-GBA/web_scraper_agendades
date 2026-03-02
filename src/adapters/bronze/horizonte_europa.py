@@ -292,6 +292,7 @@ class HorizonteEuropaAdapter(BaseAdapter):
                 country="España",
                 location_type=loc_type,
                 external_url=detail_url,
+                registration_url=detail_url,
                 external_id=raw_data.get("external_id"),
                 source_id=self.source_id,
                 source_image_url=raw_data.get("image_url"),

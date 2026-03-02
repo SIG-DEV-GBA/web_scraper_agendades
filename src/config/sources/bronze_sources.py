@@ -80,25 +80,8 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         requires_detail_fetch=True,
         max_pages=1,
     ),
-    # ============================================================
-    # ARAGÓN (Teruel)
-    # ============================================================
-    BronzeSourceConfig(
-        slug="teruel_ayuntamiento",
-        name="Agenda Cultural Ayuntamiento de Teruel",
-        listing_url="https://www.teruel.es/eventos/feed/",
-        ccaa="Aragón",
-        ccaa_code="AR",
-        province="Teruel",
-        city="Teruel",
-        tier=SourceTier.BRONZE,
-        uses_firecrawl=True,
-        event_card_selector="item",
-        title_selector="title",
-        link_selector="link",
-        requires_detail_fetch=True,
-        max_pages=1,
-    ),
+    # ARAGÓN (Teruel) — removed: RSS feed only has title+link, no real data.
+    # Teruel already covered by viralagenda_teruel.
     # ============================================================
     # NAVARRA
     # ============================================================
@@ -143,27 +126,8 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
     # ============================================================
     # LA RIOJA - Usa adapter Gold (ver gold_sources.py)
     # ============================================================
-    # ============================================================
-    # EXTREMADURA (Badajoz)
-    # ============================================================
-    BronzeSourceConfig(
-        slug="badajoz_agenda",
-        name="Agenda Cultural Ayuntamiento de Badajoz",
-        listing_url="https://www.aytobadajoz.es/es/ayto/agenda/",
-        ccaa="Extremadura",
-        ccaa_code="EX",
-        province="Badajoz",
-        city="Badajoz",
-        tier=SourceTier.BRONZE,
-        uses_firecrawl=True,
-        event_card_selector=".agenda-listado.evento",
-        title_selector=".titulo a",
-        link_selector=".titulo a",
-        image_selector=".imagen-evento img",
-        date_selector=".fechas-agenda-menu-actualidad",
-        requires_detail_fetch=True,
-        max_pages=1,
-    ),
+    # EXTREMADURA (Badajoz) — disabled: web blocks headless browsers (Firecrawl 404).
+    # Badajoz covered by viralagenda_badajoz.
     # ============================================================
     # VIRALAGENDA SOURCES
     # These use the same structure, different URLs per province

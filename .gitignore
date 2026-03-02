@@ -69,3 +69,6 @@ logs/*.log
 playwright-report/
 test-results/
 .env.production
+
+# Preview (generated)
+preview/events.json

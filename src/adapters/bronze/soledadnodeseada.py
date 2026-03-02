@@ -154,12 +154,17 @@ class SoledadNoDeseadaAdapter(BaseAdapter):
             async with semaphore:
                 try:
                     result = await firecrawl.scrape(
-                        url, formats=["html"], timeout=20000
+                        url, formats=["html", "markdown"], timeout=20000
                     )
 
                     if result.success and result.html:
                         data = self._parse_detail_page(result.html, url)
                         data["detail_url"] = url
+                        # Title from metadata (Firecrawl v1 strips <title> with onlyMainContent)
+                        if not data.get("title") and result.metadata.get("title"):
+                            raw_title = result.metadata["title"]
+                            # Remove " - SoledadNoDeseada" suffix
+                            data["title"] = raw_title.split(" - Soledad")[0].strip()
 
                         # Check if event is in the future
                         if data.get("start_date"):

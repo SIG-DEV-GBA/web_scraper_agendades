@@ -217,6 +217,7 @@ class SegibAdapter(BaseAdapter):
                 country="España",
                 location_type=LocationType.PHYSICAL,
                 external_url=detail_url,
+                registration_url=detail_url,
                 external_id=raw_data.get("external_id"),
                 source_id=self.source_id,
                 source_image_url=raw_data.get("image_url"),

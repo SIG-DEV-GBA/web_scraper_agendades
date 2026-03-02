@@ -273,6 +273,7 @@ class LaMoncloaAdapter(BaseAdapter):
                 country="España",
                 location_type=LocationType.PHYSICAL,
                 external_url=raw_data.get("detail_url"),
+                registration_url=raw_data.get("detail_url"),
                 external_id=raw_data.get("external_id"),
                 source_id=self.source_id,
                 category_slugs=["politica"],

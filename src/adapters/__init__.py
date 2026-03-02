@@ -71,6 +71,10 @@ def _ensure_adapters_loaded() -> None:
     from src.adapters.bronze import segib  # noqa: F401
     from src.adapters.bronze import jgpa  # noqa: F401
     from src.adapters.bronze import horizonte_europa  # noqa: F401
+    # Bronze tier - Economica category
+    from src.adapters.bronze import nferias  # noqa: F401
+    from src.adapters.bronze import tourdelempleo  # noqa: F401
+    from src.adapters.bronze import barcelona_activa  # noqa: F401
     # Bronze tier - Generic scraper (CLM, Asturias, La Rioja, Badajoz, etc.)
     from src.adapters import bronze_scraper_adapter  # noqa: F401
     # Bronze tier - Viralagenda (multiple CCAA)
