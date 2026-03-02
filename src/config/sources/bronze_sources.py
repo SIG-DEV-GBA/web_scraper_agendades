@@ -1207,6 +1207,60 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         requires_detail_fetch=False,
         max_pages=5,
     ),
+    # ============================================================
+    # ECONOMICA CATEGORY SOURCES
+    # ============================================================
+    # ---- NFERIAS (Nacional - Business/trade fairs) ----
+    BronzeSourceConfig(
+        slug="nferias",
+        name="nFerias - Ferias de Negocios en España",
+        listing_url="https://www.nferias.com/negocios/espana/",
+        ccaa="",  # National scope
+        ccaa_code="",
+        province="",
+        city="",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,
+        event_card_selector="",  # Custom adapter handles parsing
+        title_selector="",
+        link_selector="",
+        requires_detail_fetch=False,
+        max_pages=3,
+    ),
+    # ---- BARCELONA ACTIVA (Cataluña - Entrepreneurship workshops) ----
+    BronzeSourceConfig(
+        slug="barcelona_activa",
+        name="Barcelona Activa - Emprendimiento",
+        listing_url="https://emprenedoria.barcelonactiva.cat/es/activitats/activity-timetable",
+        ccaa="Cataluña",
+        ccaa_code="CT",
+        province="Barcelona",
+        city="Barcelona",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,  # Uses Tavily extract
+        event_card_selector="",  # Custom adapter handles parsing
+        title_selector="",
+        link_selector="",
+        requires_detail_fetch=False,
+        max_pages=1,
+    ),
+    # ---- TOUR DEL EMPLEO (Nacional - University employment fairs) ----
+    BronzeSourceConfig(
+        slug="tourdelempleo",
+        name="Tour del Empleo - Ferias de Empleo Universitarias",
+        listing_url="https://www.tourdelempleo.com/ferias/",
+        ccaa="",  # National scope
+        ccaa_code="",
+        province="",
+        city="",
+        tier=SourceTier.BRONZE,
+        uses_firecrawl=False,
+        event_card_selector="",  # Custom adapter handles parsing
+        title_selector="",
+        link_selector="",
+        requires_detail_fetch=False,
+        max_pages=1,
+    ),
 ]
 
 # Register all Bronze sources
