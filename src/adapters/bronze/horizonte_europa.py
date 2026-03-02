@@ -26,7 +26,6 @@ Page structure:
 """
 
 import asyncio
-import hashlib
 from datetime import date, datetime
 from typing import Any
 
@@ -37,6 +36,7 @@ from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.logging import get_logger
+from src.utils.ids import make_external_id
 
 logger = get_logger(__name__)
 
@@ -47,8 +47,7 @@ MAX_PAGES = 5
 
 
 def _make_external_id(title: str, date_str: str) -> str:
-    raw = f"{title.strip().lower()[:80]}_{date_str}"
-    return f"heuropa_{hashlib.md5(raw.encode()).hexdigest()[:12]}"
+    return make_external_id("heuropa", title.strip().lower()[:80], date_str)
 
 
 @register_adapter("horizonte_europa")
@@ -62,63 +61,61 @@ class HorizonteEuropaAdapter(BaseAdapter):
     ccaa_code = ""
     adapter_type = AdapterType.STATIC
     tier = "bronze"
+    MAX_EVENTS = 200
 
     async def fetch_events(
         self,
         enrich: bool = True,
         fetch_details: bool = False,
-        max_events: int = 200,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
         seen_ids: set[str] = set()
 
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                for page_num in range(MAX_PAGES):
-                    url = LISTING_URL if page_num == 0 else f"{LISTING_URL}?page={page_num}"
-                    self.logger.info("fetching_heuropa_page", url=url, page=page_num)
+            for page_num in range(MAX_PAGES):
+                url = LISTING_URL if page_num == 0 else f"{LISTING_URL}?page={page_num}"
+                self.logger.info("fetching_heuropa_page", url=url, page=page_num)
 
-                    try:
-                        response = await client.get(url)
-                        if response.status_code == 404:
-                            self.logger.info("heuropa_pagination_end", page=page_num)
-                            break
-                        response.raise_for_status()
-                    except httpx.HTTPStatusError as e:
+                try:
+                    response = await self.fetch_url(url)
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 404:
+                        self.logger.info("heuropa_pagination_end", page=page_num)
+                    else:
                         self.logger.warning(
                             "page_fetch_error", page=page_num,
                             status=e.response.status_code,
                         )
-                        break
+                    break
 
-                    page_events = self._parse_listing(response.text)
-                    if not page_events:
-                        break
+                page_events = self._parse_listing(response.text)
+                if not page_events:
+                    break
 
-                    for ev in page_events:
-                        if ev["external_id"] not in seen_ids:
-                            seen_ids.add(ev["external_id"])
-                            events.append(ev)
-                            if len(events) >= effective_limit:
-                                break
+                for ev in page_events:
+                    if ev["external_id"] not in seen_ids:
+                        seen_ids.add(ev["external_id"])
+                        events.append(ev)
+                        if len(events) >= effective_limit:
+                            break
 
-                    self.logger.info(
-                        "heuropa_page_parsed", page=page_num, found=len(page_events),
-                    )
+                self.logger.info(
+                    "heuropa_page_parsed", page=page_num, found=len(page_events),
+                )
 
-                    if len(events) >= effective_limit:
-                        break
+                if len(events) >= effective_limit:
+                    break
 
-                    # Check if there's a next page
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    next_link = soup.select_one("li.pager__item--next a")
-                    if not next_link:
-                        break
+                # Check if there's a next page
+                soup = BeautifulSoup(response.text, "html.parser")
+                next_link = soup.select_one("li.pager__item--next a")
+                if not next_link:
+                    break
 
-                    await asyncio.sleep(0.5)
+                await asyncio.sleep(0.5)
 
             self.logger.info("heuropa_total_events", count=len(events))
 

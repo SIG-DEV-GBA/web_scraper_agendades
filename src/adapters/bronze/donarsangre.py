@@ -12,7 +12,6 @@ import re
 from datetime import date, time as dt_time
 from typing import Any
 
-import httpx
 from bs4 import BeautifulSoup
 
 from src.adapters import register_adapter
@@ -41,25 +40,23 @@ class DonarSangreAdapter(BaseAdapter):
 
     BASE_URL = "https://www.donarsangre.org"
     LISTING_URL = "https://www.donarsangre.org/proximos-puntos-moviles/"
+    MAX_EVENTS = 100
 
     async def fetch_events(
         self,
         enrich: bool = True,
         fetch_details: bool = True,
-        max_events: int = 100,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Fetch blood donation points from the listing page."""
         events = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
 
         try:
             self.logger.info("fetching_donarsangre", url=self.LISTING_URL)
 
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.get(self.LISTING_URL)
-                response.raise_for_status()
+            response = await self.fetch_url(self.LISTING_URL)
 
             soup = BeautifulSoup(response.text, "html.parser")
 

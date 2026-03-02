@@ -104,13 +104,37 @@ class BronzeSourceConfig(BaseSourceConfig):
     city: str = ""
     uses_firecrawl: bool = True
     firecrawl_wait: int = 5000
-    event_card_selector: str = ""
-    title_selector: str = ""
-    date_selector: str = ""
-    link_selector: str = ""
-    image_selector: str = ""
+    firecrawl_url: str = "https://firecrawl.si-erp.cloud/scrape"
+
+    # Selectors for parsing
+    event_card_selector: str = ".small-post"
+    title_selector: str = "h4.title a"
+    image_selector: str = ".thumb img"
+    category_selector: str = ".post-category a"
+    date_selector: str = ".post-date .date-display-single"
+    time_selector: str = ""  # Optional time selector
+    location_selector: str = ""  # Optional locality/city selector (for province detection)
+    venue_selector: str = ""  # Optional venue/place name selector
+    link_selector: str = ""  # If different from title selector
+
+    # Pagination
+    max_pages: int = 1
+    page_param: str = "page"
+    pagination_type: str = "query"  # "query", "liferay", "none"
+    liferay_portlet_id: str = ""
+    items_per_page: int = 10
+
+    # Detail page config
     requires_detail_fetch: bool = True
-    max_pages: int = 3
+    detail_url_pattern: str = ""  # e.g. "https://site.com/node/{id}"
+    detail_id_extractor: str = "url_suffix"  # "url_suffix" or "query_param"
+    detail_id_param: str = ""  # Query param name if using query_param extractor
+    detail_description_selector: str = ".field-name-body, .node-content, article .content"
+    detail_dates_selector: str = ".date-display-single, .field-name-field-fecha"
+    detail_price_selector: str = ".field-name-field-precio, .price-info"
+
+    # Base URL for relative links
+    base_url: str = ""
 
     def __post_init__(self):
         if not hasattr(self, 'tier') or self.tier is None:

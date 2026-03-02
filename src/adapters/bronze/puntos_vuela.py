@@ -26,18 +26,15 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 
+
 from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.logging import get_logger
 
-logger = get_logger(__name__)
+from src.utils.date_parser import MONTHS_ES
 
-MONTHS_ES = {
-    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-    "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-    "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-}
+logger = get_logger(__name__)
 
 # Province mapping for Andalucía
 ANDALUCIA_PROVINCES = {
@@ -78,18 +75,40 @@ class PuntosVuelaAdapter(BaseAdapter):
 
     LISTING_URL = "https://puntosvuela.es/actividades"
     MAX_PAGES = 50  # 212 pages exist, but cap for safety
+    MAX_EVENTS = 200
+
+    # AJAX headers required for listing page pagination
+    AJAX_HEADERS = {
+        "X-Requested-With": "XMLHttpRequest",
+        "Accept": "text/html, */*; q=0.01",
+    }
+
+    async def get_http_client(self) -> httpx.AsyncClient:
+        """Override to disable SSL verification (puntosvuela cert issues)."""
+        if self._http_client is None or self._http_client.is_closed:
+            headers = self._scraper_config.headers.get_headers()
+            headers.update(self.config.custom_headers)
+            proxy = self._scraper_config.proxy.get_proxy()
+
+            self._http_client = httpx.AsyncClient(
+                timeout=httpx.Timeout(self.config.request_timeout),
+                headers=headers,
+                follow_redirects=True,
+                proxy=proxy,
+                verify=False,
+            )
+        return self._http_client
 
     async def _fetch_detail(
-        self, client: httpx.AsyncClient, detail_url: str,
+        self, detail_url: str,
     ) -> dict[str, Any]:
         """Fetch detail page and extract sessions, venue, address, coords."""
         result: dict[str, Any] = {}
         try:
-            resp = await client.get(
+            resp = await self.fetch_url(
                 detail_url,
                 headers={"X-Requested-With": ""},  # override AJAX header
             )
-            resp.raise_for_status()
         except Exception as e:
             self.logger.debug("detail_fetch_error", url=detail_url, error=str(e))
             return result
@@ -148,75 +167,65 @@ class PuntosVuelaAdapter(BaseAdapter):
         self,
         enrich: bool = True,
         fetch_details: bool = True,
-        max_events: int = 200,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Fetch activities from Puntos Vuela with ?off=N pagination."""
         events = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
         seen_ids = set()
 
-        headers = {
-            "X-Requested-With": "XMLHttpRequest",
-            "Accept": "text/html, */*; q=0.01",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        }
-
         try:
-            async with httpx.AsyncClient(
-                timeout=30,
-                follow_redirects=True,
-                verify=False,
-                headers=headers,
-            ) as client:
-                for page in range(1, self.MAX_PAGES + 1):
-                    # Pagination uses ?off=N (1-indexed, page 1 has no param)
-                    params = {"off": page} if page > 1 else {}
-                    self.logger.info("fetching_puntos_vuela_page", url=self.LISTING_URL, page=page)
+            for page in range(1, self.MAX_PAGES + 1):
+                # Pagination uses ?off=N (1-indexed, page 1 has no param)
+                params = {"off": page} if page > 1 else {}
+                self.logger.info("fetching_puntos_vuela_page", url=self.LISTING_URL, page=page)
 
-                    try:
-                        response = await client.get(self.LISTING_URL, params=params)
-                        response.raise_for_status()
-                    except httpx.HTTPStatusError as e:
-                        self.logger.warning("page_error", page=page, status=e.response.status_code)
-                        break
+                try:
+                    response = await self.fetch_url(
+                        self.LISTING_URL,
+                        params=params,
+                        headers=self.AJAX_HEADERS,
+                    )
+                except httpx.HTTPStatusError as e:
+                    self.logger.warning("page_error", page=page, status=e.response.status_code)
+                    break
 
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    cards = soup.find_all("div", class_="card-event")
+                soup = BeautifulSoup(response.text, "html.parser")
+                cards = soup.find_all("div", class_="card-event")
 
-                    if not cards:
-                        self.logger.info("no_more_pages", page=page)
-                        break
+                if not cards:
+                    self.logger.info("no_more_pages", page=page)
+                    break
 
-                    page_count = 0
-                    for card in cards:
-                        event_data = self._parse_card(card)
-                        if event_data and event_data["external_id"] not in seen_ids:
-                            seen_ids.add(event_data["external_id"])
+                page_count = 0
+                for card in cards:
+                    event_data = self._parse_card(card)
+                    if event_data and event_data["external_id"] not in seen_ids:
+                        seen_ids.add(event_data["external_id"])
 
-                            # Fetch detail page for sessions, venue, coords
-                            if fetch_details and event_data.get("detail_url"):
-                                await asyncio.sleep(0.3)
-                                detail = await self._fetch_detail(
-                                    client, event_data["detail_url"],
-                                )
-                                event_data.update(detail)
+                        # Fetch detail page for sessions, venue, coords
+                        if fetch_details and event_data.get("detail_url"):
+                            await asyncio.sleep(0.3)
+                            detail = await self._fetch_detail(
+                                event_data["detail_url"],
+                            )
+                            event_data.update(detail)
 
-                            events.append(event_data)
-                            page_count += 1
+                        events.append(event_data)
+                        page_count += 1
 
-                            if len(events) >= effective_limit:
-                                break
+                        if len(events) >= effective_limit:
+                            break
 
-                    self.logger.info("puntos_vuela_page_parsed", page=page, found=page_count)
+                self.logger.info("puntos_vuela_page_parsed", page=page, found=page_count)
 
-                    if len(events) >= effective_limit:
-                        break
+                if len(events) >= effective_limit:
+                    break
 
-                    # If no new unique events found, pagination exhausted
-                    if page_count == 0:
-                        break
+                # If no new unique events found, pagination exhausted
+                if page_count == 0:
+                    break
 
             self.logger.info("puntos_vuela_total_events", count=len(events))
 

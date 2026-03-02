@@ -22,7 +22,6 @@ import re
 from datetime import date
 from typing import Any
 
-import httpx
 from bs4 import BeautifulSoup
 
 from src.adapters import register_adapter
@@ -30,13 +29,9 @@ from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.logging import get_logger
 
-logger = get_logger(__name__)
+from src.utils.date_parser import MONTHS_ES
 
-MONTHS_SHORT_ES = {
-    "ene": 1, "feb": 2, "mar": 3, "abr": 4,
-    "may": 5, "jun": 6, "jul": 7, "ago": 8,
-    "sep": 9, "oct": 10, "nov": 11, "dic": 12,
-}
+logger = get_logger(__name__)
 
 # Province normalization: CeMIT uses "Coruña, A" format
 PROVINCE_MAP = {
@@ -64,56 +59,54 @@ class CemitGaliciaAdapter(BaseAdapter):
 
     LISTING_URL = "https://cemit.xunta.gal/es/formacion/formacion-presencial"
     MAX_PAGES = 6
+    MAX_EVENTS = 200
 
     async def fetch_events(
         self,
         enrich: bool = True,
         fetch_details: bool = False,
-        max_events: int = 200,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Fetch training activities from CeMIT with pagination."""
         events = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
         seen_ids = set()
 
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                for page in range(self.MAX_PAGES):
-                    url = f"{self.LISTING_URL}?page={page}"
-                    self.logger.info("fetching_cemit_page", url=url, page=page)
+            for page in range(self.MAX_PAGES):
+                url = f"{self.LISTING_URL}?page={page}"
+                self.logger.info("fetching_cemit_page", url=url, page=page)
 
-                    response = await client.get(url)
-                    response.raise_for_status()
+                response = await self.fetch_url(url)
 
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    cards = soup.find_all("div", class_="activity")
+                soup = BeautifulSoup(response.text, "html.parser")
+                cards = soup.find_all("div", class_="activity")
 
-                    if not cards:
-                        self.logger.info("no_more_pages", page=page)
-                        break
+                if not cards:
+                    self.logger.info("no_more_pages", page=page)
+                    break
 
-                    page_count = 0
-                    for card in cards:
-                        event_data = self._parse_card(card)
-                        if event_data and event_data["external_id"] not in seen_ids:
-                            seen_ids.add(event_data["external_id"])
-                            events.append(event_data)
-                            page_count += 1
+                page_count = 0
+                for card in cards:
+                    event_data = self._parse_card(card)
+                    if event_data and event_data["external_id"] not in seen_ids:
+                        seen_ids.add(event_data["external_id"])
+                        events.append(event_data)
+                        page_count += 1
 
-                            if len(events) >= effective_limit:
-                                break
+                        if len(events) >= effective_limit:
+                            break
 
-                    self.logger.info("cemit_page_parsed", page=page, found=page_count)
+                self.logger.info("cemit_page_parsed", page=page, found=page_count)
 
-                    if len(events) >= effective_limit:
-                        break
+                if len(events) >= effective_limit:
+                    break
 
-                    # Check if there's a next page (Drupal pager)
-                    next_item = soup.find("li", class_="pager__item--next")
-                    if not next_item or not next_item.find("a"):
-                        break
+                # Check if there's a next page (Drupal pager)
+                next_item = soup.find("li", class_="pager__item--next")
+                if not next_item or not next_item.find("a"):
+                    break
 
             self.logger.info("cemit_total_events", count=len(events))
 
@@ -199,7 +192,7 @@ class CemitGaliciaAdapter(BaseAdapter):
                     year = int(year_str)
                     if year < 100:
                         year += 2000
-                    month = MONTHS_SHORT_ES.get(month_str)
+                    month = MONTHS_ES.get(month_str)
                     if month:
                         start_date = date(year, month, day)
 

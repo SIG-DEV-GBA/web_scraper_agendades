@@ -10,18 +10,17 @@ Each month section has class .mes-line-NN (01-12) with <li> items
 containing date, title, and optional link.
 """
 
-import hashlib
 import re
 from datetime import date
 from typing import Any
 
-import httpx
 from bs4 import BeautifulSoup
 
 from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.logging import get_logger
+from src.utils.ids import make_external_id
 
 logger = get_logger(__name__)
 
@@ -34,8 +33,7 @@ AGENDA_URL = f"{BASE_URL}/agenda-institucional/"
 
 def _make_external_id(title: str, event_date: date) -> str:
     """Generate a stable external_id from title + date."""
-    raw = f"{title.strip().lower()}_{event_date.isoformat()}"
-    return f"defensor_{hashlib.md5(raw.encode()).hexdigest()[:12]}"
+    return make_external_id("defensor", title, event_date.isoformat())
 
 
 @register_adapter("defensor_pueblo")
@@ -49,61 +47,59 @@ class DefensorPuebloAdapter(BaseAdapter):
     ccaa_code = "MD"
     adapter_type = AdapterType.STATIC
     tier = "bronze"
+    MAX_EVENTS = 200
 
     async def fetch_events(
         self,
         enrich: bool = True,
         fetch_details: bool = False,
-        max_events: int = 200,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Fetch agenda items from Defensor del Pueblo."""
         events: list[dict[str, Any]] = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
         seen_ids: set[str] = set()
 
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                self.logger.info("fetching_defensor_pueblo", url=AGENDA_URL)
-                response = await client.get(AGENDA_URL)
-                response.raise_for_status()
+            self.logger.info("fetching_defensor_pueblo", url=AGENDA_URL)
+            response = await self.fetch_url(AGENDA_URL)
 
-                soup = BeautifulSoup(response.text, "html.parser")
+            soup = BeautifulSoup(response.text, "html.parser")
 
-                # Strategy 1: find month containers .mes-line-01 to .mes-line-12
-                items_found = False
-                for month_num in range(1, 13):
-                    container = soup.find(class_=f"mes-line-{month_num:02d}")
-                    if not container:
-                        continue
+            # Strategy 1: find month containers .mes-line-01 to .mes-line-12
+            items_found = False
+            for month_num in range(1, 13):
+                container = soup.find(class_=f"mes-line-{month_num:02d}")
+                if not container:
+                    continue
 
-                    for li in container.find_all("li"):
+                for li in container.find_all("li"):
+                    event_data = self._parse_item(li)
+                    if event_data and event_data["external_id"] not in seen_ids:
+                        seen_ids.add(event_data["external_id"])
+                        events.append(event_data)
+                        items_found = True
+                        if len(events) >= effective_limit:
+                            break
+
+                if len(events) >= effective_limit:
+                    break
+
+            # Strategy 2 (fallback): find all <li> with <a><strong> + date pattern
+            if not items_found:
+                self.logger.info("defensor_fallback_strategy")
+                for li in soup.find_all("li"):
+                    a_tag = li.find("a")
+                    strong = li.find("strong")
+                    text = li.get_text()
+                    if a_tag and strong and DATE_PATTERN.search(text):
                         event_data = self._parse_item(li)
                         if event_data and event_data["external_id"] not in seen_ids:
                             seen_ids.add(event_data["external_id"])
                             events.append(event_data)
-                            items_found = True
                             if len(events) >= effective_limit:
                                 break
-
-                    if len(events) >= effective_limit:
-                        break
-
-                # Strategy 2 (fallback): find all <li> with <a><strong> + date pattern
-                if not items_found:
-                    self.logger.info("defensor_fallback_strategy")
-                    for li in soup.find_all("li"):
-                        a_tag = li.find("a")
-                        strong = li.find("strong")
-                        text = li.get_text()
-                        if a_tag and strong and DATE_PATTERN.search(text):
-                            event_data = self._parse_item(li)
-                            if event_data and event_data["external_id"] not in seen_ids:
-                                seen_ids.add(event_data["external_id"])
-                                events.append(event_data)
-                                if len(events) >= effective_limit:
-                                    break
 
             self.logger.info("defensor_total_events", count=len(events))
 

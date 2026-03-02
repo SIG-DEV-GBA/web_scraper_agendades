@@ -42,6 +42,7 @@ class PamplonaAdapter(BaseAdapter):
 
     # Pagination - Drupal uses ?page=X (0-based)
     MAX_PAGES = 10  # Safety limit (site has ~20 pages)
+    MAX_EVENTS = 100
 
     # CSS Selectors - Drupal structure
     EVENT_CARD_SELECTOR = ".views-row article.event.teaser"
@@ -52,14 +53,13 @@ class PamplonaAdapter(BaseAdapter):
     VENUE_SELECTOR = ".field--name-field-event-info a"
 
     async def fetch_events(
-        self, enrich: bool = True, fetch_details: bool = True, max_events: int = 100, limit: int | None = None, **kwargs
+        self, enrich: bool = True, fetch_details: bool = True, limit: int | None = None, **kwargs
     ) -> list[dict[str, Any]]:
         """Fetch events from Pamplona Ayuntamiento with pagination.
 
         Args:
             enrich: Not used (LLM enrichment done in pipeline)
             fetch_details: If True, fetch detail pages for full data
-            max_events: Maximum number of events to fetch
             limit: If set, applies early limit BEFORE fetching details (optimization)
 
         Returns:
@@ -69,7 +69,7 @@ class PamplonaAdapter(BaseAdapter):
         seen_ids = set()
 
         # If limit is set, use it as effective max (optimization)
-        effective_max = min(max_events, limit) if limit else max_events
+        effective_max = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
 
         try:
             page = 0

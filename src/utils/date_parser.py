@@ -38,6 +38,9 @@ SPANISH_MONTHS = {
     "dic": 12,
 }
 
+# Alias for adapter compatibility — adapters import MONTHS_ES from here.
+MONTHS_ES = SPANISH_MONTHS
+
 # Common date patterns in Spanish websites
 DATE_PATTERNS = [
     # "15 de enero de 2025" or "15 enero 2025"

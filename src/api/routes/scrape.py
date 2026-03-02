@@ -541,21 +541,10 @@ async def preview_source(source_slug: str, limit: int | None = None):
 # BATCH VIRALAGENDA ENDPOINT (for cron jobs)
 # ============================================================
 
-# Valid Viralagenda sources (only CCAA that exist)
-VALID_VIRALAGENDA_SOURCES = [
-    # Andalucía (8)
-    "viralagenda_almeria", "viralagenda_cadiz", "viralagenda_cordoba",
-    "viralagenda_granada", "viralagenda_huelva", "viralagenda_jaen",
-    "viralagenda_malaga", "viralagenda_sevilla",
-    # Castilla y León (9)
-    "viralagenda_avila", "viralagenda_burgos", "viralagenda_leon",
-    "viralagenda_palencia", "viralagenda_salamanca", "viralagenda_segovia",
-    "viralagenda_soria", "viralagenda_valladolid", "viralagenda_zamora",
-    # Extremadura (2)
-    "viralagenda_caceres", "viralagenda_badajoz",
-    # Galicia (4)
-    "viralagenda_a_coruna", "viralagenda_lugo", "viralagenda_ourense",
-    "viralagenda_pontevedra",
+# Derive valid Viralagenda sources dynamically from SourceRegistry
+_valid_viralagenda_sources = [
+    s.slug for s in SourceRegistry.all()
+    if s.slug.startswith("viralagenda_")
 ]
 
 
@@ -615,7 +604,7 @@ async def batch_viralagenda(
     sources_to_run = []
     sources_skipped = []
 
-    for source in VALID_VIRALAGENDA_SOURCES:
+    for source in _valid_viralagenda_sources:
         current = counts.get(source, 0)
         if current >= request.min_events:
             sources_skipped.append(source)

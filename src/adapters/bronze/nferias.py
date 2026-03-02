@@ -10,7 +10,6 @@ Cards use Bootstrap layout with structured date/venue/category data.
 Pagination via ?page=N query parameter.
 """
 
-import hashlib
 import re
 from datetime import date
 from typing import Any
@@ -22,14 +21,10 @@ from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.logging import get_logger
+from src.utils.date_parser import MONTHS_ES
+from src.utils.ids import make_external_id
 
 logger = get_logger(__name__)
-
-MONTHS_ES = {
-    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-    "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-    "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-}
 
 BASE_URL = "https://www.nferias.com"
 LISTING_URL = f"{BASE_URL}/negocios/espana/"
@@ -42,8 +37,7 @@ DATE_RANGE_RE = re.compile(
 
 
 def _make_external_id(title: str, event_date: date) -> str:
-    raw = f"{title.strip().lower()}_{event_date.isoformat()}"
-    return f"nferias_{hashlib.md5(raw.encode()).hexdigest()[:12]}"
+    return make_external_id("nferias", title, event_date.isoformat())
 
 
 def _parse_date_from_time_tags(card: Any) -> tuple[date | None, date | None]:
@@ -104,71 +98,68 @@ class NFeriasAdapter(BaseAdapter):
     tier = "bronze"
 
     MAX_PAGES = 3
+    MAX_EVENTS = 200
 
     async def fetch_events(
         self,
         enrich: bool = True,
-        max_events: int = 200,
+        fetch_details: bool = True,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Fetch fair listings from nferias with pagination."""
         events: list[dict[str, Any]] = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
         seen_ids: set[str] = set()
 
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                for page in range(1, self.MAX_PAGES + 1):
-                    url = LISTING_URL if page == 1 else f"{LISTING_URL}?page={page}"
+            for page in range(1, self.MAX_PAGES + 1):
+                url = LISTING_URL if page == 1 else f"{LISTING_URL}?page={page}"
 
-                    self.logger.info("fetching_nferias_page", url=url, page=page)
+                self.logger.info("fetching_nferias_page", url=url, page=page)
 
-                    try:
-                        response = await client.get(url)
-                        if response.status_code == 404:
-                            break
-                        response.raise_for_status()
-                    except httpx.HTTPStatusError as e:
-                        if e.response.status_code == 404:
-                            break
-                        raise
-
-                    soup = BeautifulSoup(response.text, "html.parser")
-
-                    # Cards: div.row.no-gutters.align-items-center
-                    cards = soup.select("div.row.no-gutters.align-items-center")
-
-                    if not cards:
-                        self.logger.info("no_cards_found", page=page)
+                try:
+                    response = await self.fetch_url(url)
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 404:
                         break
+                    raise
 
-                    page_count = 0
-                    for card in cards:
-                        event_data = self._parse_card(card)
-                        if not event_data:
-                            continue
+                soup = BeautifulSoup(response.text, "html.parser")
 
-                        eid = event_data.get("external_id", "")
-                        if eid in seen_ids:
-                            continue
-                        seen_ids.add(eid)
+                # Cards: div.row.no-gutters.align-items-center
+                cards = soup.select("div.row.no-gutters.align-items-center")
 
-                        events.append(event_data)
-                        page_count += 1
+                if not cards:
+                    self.logger.info("no_cards_found", page=page)
+                    break
 
-                        if len(events) >= effective_limit:
-                            break
+                page_count = 0
+                for card in cards:
+                    event_data = self._parse_card(card)
+                    if not event_data:
+                        continue
 
-                    self.logger.info("nferias_page_parsed", page=page, found=page_count)
+                    eid = event_data.get("external_id", "")
+                    if eid in seen_ids:
+                        continue
+                    seen_ids.add(eid)
+
+                    events.append(event_data)
+                    page_count += 1
 
                     if len(events) >= effective_limit:
                         break
 
-                    # Check if there's a next page
-                    next_link = soup.find("a", string=re.compile(r"Siguiente"))
-                    if not next_link:
-                        break
+                self.logger.info("nferias_page_parsed", page=page, found=page_count)
+
+                if len(events) >= effective_limit:
+                    break
+
+                # Check if there's a next page
+                next_link = soup.find("a", string=re.compile(r"Siguiente"))
+                if not next_link:
+                    break
 
             self.logger.info("nferias_total_events", count=len(events))
 

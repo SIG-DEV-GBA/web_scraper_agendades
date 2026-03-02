@@ -21,7 +21,6 @@ Page structure (well-structured with CSS classes):
 """
 
 import asyncio
-import hashlib
 import re
 from datetime import date, time, timedelta
 from typing import Any
@@ -33,6 +32,7 @@ from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.logging import get_logger
+from src.utils.ids import make_external_id
 
 logger = get_logger(__name__)
 
@@ -45,8 +45,7 @@ AGENDA_BASE = f"{BASE_URL}/gobierno/agenda/Paginas/agenda.aspx"
 
 def _make_external_id(event_date: date, cargo: str, desc: str) -> str:
     """Generate a stable external_id from date + cargo + description."""
-    raw = f"{event_date.isoformat()}_{cargo.strip().lower()}_{desc.strip().lower()[:80]}"
-    return f"moncloa_{hashlib.md5(raw.encode()).hexdigest()[:12]}"
+    return make_external_id("moncloa", event_date.isoformat(), cargo, desc.strip().lower()[:80])
 
 
 @register_adapter("la_moncloa")
@@ -64,18 +63,18 @@ class LaMoncloaAdapter(BaseAdapter):
     # Scrape 1 day back + 7 days ahead
     DAYS_BACK = 1
     DAYS_AHEAD = 7
+    MAX_EVENTS = 200
 
     async def fetch_events(
         self,
         enrich: bool = True,
         fetch_details: bool = False,
-        max_events: int = 200,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Fetch agenda items from La Moncloa for a range of days."""
         events: list[dict[str, Any]] = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
         seen_ids: set[str] = set()
 
         today = date.today()
@@ -83,43 +82,41 @@ class LaMoncloaAdapter(BaseAdapter):
         end_day = today + timedelta(days=self.DAYS_AHEAD)
 
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                current = start_day
-                while current <= end_day:
-                    url = f"{AGENDA_BASE}?d={current:%Y%m%d}"
-                    self.logger.info("fetching_moncloa_day", url=url, date=current.isoformat())
+            current = start_day
+            while current <= end_day:
+                url = f"{AGENDA_BASE}?d={current:%Y%m%d}"
+                self.logger.info("fetching_moncloa_day", url=url, date=current.isoformat())
 
-                    try:
-                        response = await client.get(url)
-                        response.raise_for_status()
-                    except httpx.HTTPStatusError as e:
-                        self.logger.warning(
-                            "day_fetch_error", date=current.isoformat(),
-                            status=e.response.status_code,
-                        )
-                        current += timedelta(days=1)
-                        continue
-
-                    day_events = self._parse_day_page(response.text, current)
-
-                    for event_data in day_events:
-                        if event_data["external_id"] not in seen_ids:
-                            seen_ids.add(event_data["external_id"])
-                            events.append(event_data)
-                            if len(events) >= effective_limit:
-                                break
-
-                    self.logger.info(
-                        "moncloa_day_parsed",
-                        date=current.isoformat(),
-                        found=len(day_events),
+                try:
+                    response = await self.fetch_url(url)
+                except httpx.HTTPStatusError as e:
+                    self.logger.warning(
+                        "day_fetch_error", date=current.isoformat(),
+                        status=e.response.status_code,
                     )
-
-                    if len(events) >= effective_limit:
-                        break
-
                     current += timedelta(days=1)
-                    await asyncio.sleep(0.5)
+                    continue
+
+                day_events = self._parse_day_page(response.text, current)
+
+                for event_data in day_events:
+                    if event_data["external_id"] not in seen_ids:
+                        seen_ids.add(event_data["external_id"])
+                        events.append(event_data)
+                        if len(events) >= effective_limit:
+                            break
+
+                self.logger.info(
+                    "moncloa_day_parsed",
+                    date=current.isoformat(),
+                    found=len(day_events),
+                )
+
+                if len(events) >= effective_limit:
+                    break
+
+                current += timedelta(days=1)
+                await asyncio.sleep(0.5)
 
             self.logger.info("moncloa_total_events", count=len(events))
 

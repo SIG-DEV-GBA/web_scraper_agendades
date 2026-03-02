@@ -19,6 +19,7 @@ from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventContact, LocationType
 from src.logging import get_logger
 from src.utils.contacts import extract_contact_info, extract_registration_info
+from src.utils.date_parser import MONTHS_ES
 
 logger = get_logger(__name__)
 
@@ -65,8 +66,9 @@ class LaRiojaAgendaAdapter(BaseAdapter):
     # Pagination config
     LISTING_URL = "https://agenda.larioja.com/eventos/la-rioja/listado.html"
     MAX_PAGES = 10  # Safety limit
+    MAX_EVENTS = 100
 
-    async def fetch_events(self, enrich: bool = True, fetch_details: bool = True, max_events: int = 100, limit: int | None = None, **kwargs) -> list[dict[str, Any]]:
+    async def fetch_events(self, enrich: bool = True, fetch_details: bool = True, limit: int | None = None, **kwargs) -> list[dict[str, Any]]:
         """Fetch events from Agenda La Rioja with pagination.
 
         The site uses pagination via /eventos/la-rioja/listado.html?pag=X
@@ -75,7 +77,6 @@ class LaRiojaAgendaAdapter(BaseAdapter):
         Args:
             enrich: Not used (LLM enrichment done in pipeline)
             fetch_details: If True, fetch detail pages for full data
-            max_events: Maximum number of events to fetch (default: 100)
             limit: If set, applies early limit BEFORE fetching details (optimization)
 
         Returns:
@@ -85,7 +86,7 @@ class LaRiojaAgendaAdapter(BaseAdapter):
         seen_ids = set()  # Avoid duplicates across pages
 
         # If limit is set, use it as effective max (optimization: stop pagination early)
-        effective_max = min(max_events, limit) if limit else max_events
+        effective_max = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
 
         try:
             page = 1
@@ -370,19 +371,13 @@ class LaRiojaAgendaAdapter(BaseAdapter):
 
     def _parse_spanish_date(self, text: str) -> date | None:
         """Parse Spanish date format: '14 de febrero de 2026'."""
-        months = {
-            "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-            "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-            "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-        }
-
         # Pattern: day de month de year
         match = re.search(r"(\d{1,2})\s+de\s+(\w+)\s+de\s+(\d{4})", text.lower())
         if match:
             day = int(match.group(1))
             month_name = match.group(2)
             year = int(match.group(3))
-            month = months.get(month_name)
+            month = MONTHS_ES.get(month_name)
             if month:
                 try:
                     return date(year, month, day)

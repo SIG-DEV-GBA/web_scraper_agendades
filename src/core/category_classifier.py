@@ -489,41 +489,6 @@ class CategoryClassifier:
 
         return selected, scores
 
-    def classify_batch(
-        self,
-        events: list[dict[str, Any]],
-        text_field: str = "normalized_text",
-        title_field: str = "title",
-    ) -> dict[str, tuple[list[str], dict[str, float]]]:
-        """Classify multiple events.
-
-        Args:
-            events: List of event dicts
-            text_field: Field containing normalized text
-            title_field: Field containing title
-
-        Returns:
-            Dict mapping event_id to (categories, scores)
-        """
-        results = {}
-
-        for event in events:
-            event_id = event.get("external_id") or event.get("id")
-            if not event_id:
-                continue
-
-            text = event.get(text_field) or event.get("description") or ""
-            title = event.get(title_field) or ""
-
-            if not text and not title:
-                continue
-
-            categories, scores = self.classify(text, title)
-            results[str(event_id)] = (categories, scores)
-
-        logger.info("batch_classification_complete", total=len(events), classified=len(results))
-        return results
-
     def refresh_cache(self) -> None:
         """Force recompute category embeddings."""
         if CATEGORY_EMBEDDINGS_CACHE.exists():

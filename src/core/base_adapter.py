@@ -346,12 +346,21 @@ class BaseAdapter(ABC):
     # ==========================================
 
     @abstractmethod
-    async def fetch_events(self, enrich: bool = True) -> list[dict[str, Any]]:
+    async def fetch_events(
+        self,
+        enrich: bool = True,
+        fetch_details: bool = True,
+        limit: int | None = None,
+        **kwargs,
+    ) -> list[dict[str, Any]]:
         """Fetch raw event data from the source.
 
         Args:
             enrich: If True, run any LLM/AI enrichment. Set to False for batch
                    processing where enrichment is done separately on paginated data.
+            fetch_details: If True, fetch detail pages for richer event data.
+            limit: Maximum number of events to return. If None, uses adapter default.
+            **kwargs: Forward-compatible keyword arguments.
 
         Returns:
             List of raw event dictionaries from the source.

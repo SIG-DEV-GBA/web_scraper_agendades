@@ -19,6 +19,7 @@ from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType, OrganizerType
 from src.logging import get_logger
 from src.utils.contacts import extract_contact_info, extract_registration_info
+from src.utils.date_parser import MONTHS_ES
 
 logger = get_logger(__name__)
 
@@ -44,19 +45,15 @@ class VisitNavarraAdapter(BaseAdapter):
     MAX_PAGES = 10  # Safety limit
     EVENTS_PER_PAGE = 10
 
-    # Month mapping for date parsing
-    MONTHS_ES = {
-        "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-        "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-        "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-    }
     MONTHS_EN = {
         "january": 1, "february": 2, "march": 3, "april": 4,
         "may": 5, "june": 6, "july": 7, "august": 8,
         "september": 9, "october": 10, "november": 11, "december": 12,
     }
 
-    async def fetch_events(self, enrich: bool = True, fetch_details: bool = True, max_events: int = 100, limit: int | None = None, **kwargs) -> list[dict[str, Any]]:
+    MAX_EVENTS = 100
+
+    async def fetch_events(self, enrich: bool = True, fetch_details: bool = True, limit: int | None = None, **kwargs) -> list[dict[str, Any]]:
         """Fetch events from Visit Navarra with pagination using Playwright.
 
         The site uses JavaScript pagination with a "Mostrar" dropdown (8/12/24/48 items).
@@ -65,7 +62,6 @@ class VisitNavarraAdapter(BaseAdapter):
         Args:
             enrich: Not used (LLM enrichment done in pipeline)
             fetch_details: If True, fetch detail pages for full data
-            max_events: Maximum number of events to fetch
             limit: If set, applies early limit BEFORE fetching details (optimization)
 
         Returns:
@@ -75,7 +71,7 @@ class VisitNavarraAdapter(BaseAdapter):
         seen_ids = set()
 
         # If limit is set, use it as effective max (optimization)
-        effective_max = min(max_events, limit) if limit else max_events
+        effective_max = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
 
         try:
             self.logger.info("fetching_visitnavarra_playwright", url=self.AGENDA_URL)
@@ -571,13 +567,6 @@ class VisitNavarraAdapter(BaseAdapter):
         today = date.today()
         current_year = today.year
 
-        # Short month names in Spanish
-        months_short = {
-            "ene": 1, "feb": 2, "mar": 3, "abr": 4,
-            "may": 5, "jun": 6, "jul": 7, "ago": 8,
-            "sep": 9, "oct": 10, "nov": 11, "dic": 12,
-        }
-
         # Pattern: "DD mon - DD mon" or "DD mon"
         # Examples: "15 feb - 17 mar", "17 feb", "20 feb - 22 feb"
         pattern = r"(\d{1,2})\s+(\w{3})"
@@ -586,7 +575,7 @@ class VisitNavarraAdapter(BaseAdapter):
         dates = []
         for day_str, month_str in matches:
             day = int(day_str)
-            month = months_short.get(month_str)
+            month = MONTHS_ES.get(month_str)
             if month:
                 # Determine year - if month is before current month, assume next year
                 year = current_year
@@ -645,7 +634,7 @@ class VisitNavarraAdapter(BaseAdapter):
             month_name = match.group(2)
             year = int(match.group(3)) if match.group(3) else today.year
 
-            month = self.MONTHS_ES.get(month_name)
+            month = MONTHS_ES.get(month_name)
             if month:
                 try:
                     d = date(year, month, day)

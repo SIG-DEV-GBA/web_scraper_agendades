@@ -71,4 +71,23 @@ test-results/
 .env.production
 
 # Preview (generated)
-preview/events.json
+preview/
+
+# Temp scraping artifacts
+*_temp.html
+*_sample.html
+*_sample.json
+
+# Generated/temp data
+output/
+deploy.log
+data/test.json
+data/*.html
+
+# Images (screenshots, debug)
+image.png
+image copy.png
+
+# One-off notes
+fuentes_categoria_*.md
+CATEGORIAS_INDICACIONES.md

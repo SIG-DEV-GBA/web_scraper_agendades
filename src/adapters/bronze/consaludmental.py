@@ -24,14 +24,9 @@ from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.logging import get_logger
 
-logger = get_logger(__name__)
+from src.utils.date_parser import MONTHS_ES
 
-# Month names in Spanish
-MONTHS_ES = {
-    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-    "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-    "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-}
+logger = get_logger(__name__)
 
 # Spanish provinces for location detection
 PROVINCES_ES = {
@@ -151,31 +146,31 @@ class ConSaludMentalAdapter(BaseAdapter):
     tier = "bronze"
 
     API_URL = "https://consaludmental.org/wp-json/wp/v2/mec-events"
+    MAX_EVENTS = 100
 
     async def fetch_events(
         self,
         enrich: bool = True,
         fetch_details: bool = True,
-        max_events: int = 100,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Fetch mental health events from WordPress REST API."""
         events = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
         today = date.today()
 
         try:
             self.logger.info("fetching_consaludmental", limit=effective_limit)
 
-            async with httpx.AsyncClient(timeout=30) as client:
-                # Fetch recent events (ordered by date desc)
-                page = 1
-                per_page = 100
-                fetched_count = 0
+            # Fetch recent events (ordered by date desc)
+            page = 1
+            per_page = 100
+            fetched_count = 0
 
-                while len(events) < effective_limit:
-                    response = await client.get(
+            while len(events) < effective_limit:
+                try:
+                    response = await self.fetch_url(
                         self.API_URL,
                         params={
                             "per_page": per_page,
@@ -184,38 +179,38 @@ class ConSaludMentalAdapter(BaseAdapter):
                             "order": "desc",
                         },
                     )
-
-                    if response.status_code == 400:
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 400:
                         # No more pages
                         break
+                    raise
 
-                    response.raise_for_status()
-                    data = response.json()
+                data = response.json()
 
-                    if not data:
+                if not data:
+                    break
+
+                fetched_count += len(data)
+
+                for item in data:
+                    if len(events) >= effective_limit:
                         break
 
-                    fetched_count += len(data)
+                    event_data = self._parse_api_event(item)
 
-                    for item in data:
-                        if len(events) >= effective_limit:
-                            break
+                    if event_data:
+                        # Filter future events only
+                        if event_data.get("start_date") and event_data["start_date"] >= today:
+                            events.append(event_data)
+                        elif not event_data.get("start_date"):
+                            # Include events without parseable date (LLM will handle)
+                            events.append(event_data)
 
-                        event_data = self._parse_api_event(item)
+                # Check if we've processed enough
+                if fetched_count >= 300:  # Safety limit
+                    break
 
-                        if event_data:
-                            # Filter future events only
-                            if event_data.get("start_date") and event_data["start_date"] >= today:
-                                events.append(event_data)
-                            elif not event_data.get("start_date"):
-                                # Include events without parseable date (LLM will handle)
-                                events.append(event_data)
-
-                    # Check if we've processed enough
-                    if fetched_count >= 300:  # Safety limit
-                        break
-
-                    page += 1
+                page += 1
 
             self.logger.info(
                 "consaludmental_events_found",
@@ -234,40 +229,33 @@ class ConSaludMentalAdapter(BaseAdapter):
         return events
 
     async def _fetch_detail_pages(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Fetch detail pages to extract organizer info."""
-        semaphore = asyncio.Semaphore(3)  # Limit concurrent requests
+        """Fetch detail pages sequentially to extract organizer info."""
+        results = []
 
-        async def fetch_single(event: dict[str, Any]) -> dict[str, Any]:
-            async with semaphore:
-                detail_url = event.get("detail_url")
-                if not detail_url:
-                    return event
+        for event in events:
+            detail_url = event.get("detail_url")
+            if not detail_url:
+                results.append(event)
+                continue
 
-                try:
-                    async with httpx.AsyncClient(timeout=15) as client:
-                        response = await client.get(detail_url)
-                        if response.status_code == 200:
-                            html = response.text
-                            # Extract organizer
-                            organizer_name = self._extract_organizer(html)
-                            if organizer_name:
-                                event["organizer_name"] = organizer_name
-                            # Extract online URL (YouTube, Zoom, etc.)
-                            online_url = self._extract_online_url(html)
-                            if online_url:
-                                event["online_url"] = online_url
-                except Exception as e:
-                    self.logger.debug("detail_fetch_error", url=detail_url, error=str(e))
+            try:
+                response = await self.fetch_url(detail_url)
+                html = response.text
+                # Extract organizer
+                organizer_name = self._extract_organizer(html)
+                if organizer_name:
+                    event["organizer_name"] = organizer_name
+                # Extract online URL (YouTube, Zoom, etc.)
+                online_url = self._extract_online_url(html)
+                if online_url:
+                    event["online_url"] = online_url
+            except Exception as e:
+                self.logger.debug("detail_fetch_error", url=detail_url, error=str(e))
 
-                await asyncio.sleep(0.3)  # Rate limiting
-                return event
-
-        # Fetch all detail pages concurrently
-        tasks = [fetch_single(event) for event in events]
-        results = await asyncio.gather(*tasks)
+            results.append(event)
 
         self.logger.info("detail_pages_fetched", count=len(results))
-        return list(results)
+        return results
 
     def _extract_organizer(self, html: str) -> str | None:
         """Extract organizer name from detail page HTML.

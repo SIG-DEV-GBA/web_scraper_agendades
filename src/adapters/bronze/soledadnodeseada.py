@@ -23,14 +23,9 @@ from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.core.firecrawl_client import get_firecrawl_client
 from src.logging import get_logger
 
-logger = get_logger(__name__)
+from src.utils.date_parser import MONTHS_ES
 
-# Month names in Spanish
-MONTHS_ES = {
-    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-    "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-    "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-}
+logger = get_logger(__name__)
 
 
 @register_adapter("soledadnodeseada")
@@ -48,12 +43,12 @@ class SoledadNoDeseadaAdapter(BaseAdapter):
 
     BASE_URL = "https://soledadnodeseada.es"
     LISTING_URL = "https://soledadnodeseada.es/actividades/"
+    MAX_EVENTS = 100
 
     async def fetch_events(
         self,
         enrich: bool = True,
         fetch_details: bool = True,
-        max_events: int = 100,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
@@ -63,7 +58,7 @@ class SoledadNoDeseadaAdapter(BaseAdapter):
         Number of clicks is calculated based on limit (approx 8 events per click).
         """
         events = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
 
         # Calculate clicks needed (approx 8 events per click, +5 buffer)
         num_clicks = min(30, (effective_limit // 8) + 5)

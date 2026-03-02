@@ -243,87 +243,8 @@ class InsertionPipeline:
                     if not event.title.startswith("["):
                         event.title = prefix + event.title
 
-            # Streaming mode: process and insert in batches
-            if self.config.streaming_insert and not self.config.dry_run:
-                batch_size = self.config.streaming_batch_size
-                total_inserted = 0
-                total_skipped = 0
-                total_failed = 0
-                total_images = 0
-
-                for i in range(0, len(events), batch_size):
-                    batch = events[i:i + batch_size]
-                    batch_num = (i // batch_size) + 1
-                    total_batches = (len(events) + batch_size - 1) // batch_size
-
-                    logger.info(
-                        "streaming_batch_start",
-                        source=self.config.source_slug,
-                        batch=f"{batch_num}/{total_batches}",
-                        events=len(batch),
-                    )
-
-                    # Enrich batch
-                    batch_enrichments = {}
-                    if not self.config.skip_enrichment:
-                        batch_enrichments = self._run_enrichment(batch)
-                        self._apply_enrichments(batch, batch_enrichments)
-                        result.enriched_count += len(batch_enrichments)
-
-                    # Fetch images for batch
-                    if not self.config.skip_images:
-                        images = self._fetch_images(batch, batch_enrichments)
-                        total_images += images
-
-                    # Insert batch immediately
-                    stats = await self._insert_events(batch)
-                    total_inserted += stats["inserted"]
-                    total_skipped += stats["skipped"]
-                    total_failed += stats["failed"]
-
-                    logger.info(
-                        "streaming_batch_complete",
-                        source=self.config.source_slug,
-                        batch=f"{batch_num}/{total_batches}",
-                        inserted=stats["inserted"],
-                        skipped=stats["skipped"],
-                    )
-
-                    # Periodic memory cleanup to prevent OOM
-                    if batch_num % CLEANUP_EVERY_N_BATCHES == 0:
-                        _cleanup_memory()
-
-                result.inserted_count = total_inserted
-                result.skipped_existing = total_skipped
-                result.failed_count = total_failed
-                result.images_found = total_images
-
-            else:
-                # Original non-streaming mode
-                # Step 6: LLM enrichment
-                enrichments = {}
-                if not self.config.skip_enrichment:
-                    enrichments = self._run_enrichment(events)
-                    self._apply_enrichments(events, enrichments)
-                    result.enriched_count = len(enrichments)
-
-                # Step 7: Fetch images
-                if not self.config.skip_images:
-                    images_found = self._fetch_images(events, enrichments)
-                    result.images_found = images_found
-
-                # Step 8: Insert to Supabase (or dry run)
-                if self.config.dry_run:
-                    logger.info(
-                        "pipeline_dry_run",
-                        source=self.config.source_slug,
-                        would_insert=len(events),
-                    )
-                else:
-                    stats = await self._insert_events(events)
-                    result.inserted_count = stats["inserted"]
-                    result.skipped_existing = stats["skipped"]
-                    result.failed_count = stats["failed"]
+            # Step 6-8: Enrich, fetch images, and insert (shared logic)
+            await self._process_batch(events, result)
 
             # Calculate distributions
             result.categories = self._count_categories(events)
@@ -351,6 +272,87 @@ class InsertionPipeline:
         result.duration_seconds = (datetime.now() - start_time).total_seconds()
         return result
 
+    async def _process_batch(
+        self,
+        events: list[EventCreate],
+        result: PipelineResult,
+    ) -> None:
+        """Shared logic: enrich -> fetch images -> insert.
+
+        Handles both streaming (batched) and non-streaming modes.
+        Updates ``result`` counts in place.
+
+        Args:
+            events: Parsed, filtered events ready for enrichment and insertion.
+            result: PipelineResult to accumulate counts into.
+        """
+        if self.config.streaming_insert and not self.config.dry_run:
+            # Streaming mode: process and insert in small batches
+            batch_size = self.config.streaming_batch_size
+
+            for i in range(0, len(events), batch_size):
+                batch = events[i:i + batch_size]
+                batch_num = (i // batch_size) + 1
+                total_batches = (len(events) + batch_size - 1) // batch_size
+
+                logger.info(
+                    "streaming_batch_start",
+                    source=self.config.source_slug,
+                    batch=f"{batch_num}/{total_batches}",
+                    events=len(batch),
+                )
+
+                # Enrich batch
+                batch_enrichments = {}
+                if not self.config.skip_enrichment:
+                    batch_enrichments = self._run_enrichment(batch)
+                    self._apply_enrichments(batch, batch_enrichments)
+                    result.enriched_count += len(batch_enrichments)
+
+                # Fetch images for batch
+                if not self.config.skip_images:
+                    result.images_found += self._fetch_images(batch, batch_enrichments)
+
+                # Insert batch immediately
+                stats = await self._insert_events(batch)
+                result.inserted_count += stats["inserted"]
+                result.skipped_existing += stats["skipped"]
+                result.failed_count += stats["failed"]
+
+                logger.info(
+                    "streaming_batch_complete",
+                    source=self.config.source_slug,
+                    batch=f"{batch_num}/{total_batches}",
+                    inserted=stats["inserted"],
+                    skipped=stats["skipped"],
+                )
+
+                # Periodic memory cleanup to prevent OOM
+                if batch_num % CLEANUP_EVERY_N_BATCHES == 0:
+                    _cleanup_memory()
+        else:
+            # Non-streaming mode: process all events at once
+            enrichments: dict[str, Any] = {}
+            if not self.config.skip_enrichment:
+                enrichments = self._run_enrichment(events)
+                self._apply_enrichments(events, enrichments)
+                result.enriched_count = len(enrichments)
+
+            if not self.config.skip_images:
+                result.images_found = self._fetch_images(events, enrichments)
+
+            if self.config.dry_run:
+                logger.info(
+                    "pipeline_dry_run",
+                    source=self.config.source_slug,
+                    would_insert=len(events),
+                )
+            else:
+                stats = await self._insert_events(events)
+                result.inserted_count = stats["inserted"]
+                result.skipped_existing = stats["skipped"]
+                result.failed_count = stats["failed"]
+
     async def _run_streaming_viralagenda(
         self,
         result: PipelineResult,
@@ -358,18 +360,12 @@ class InsertionPipeline:
     ) -> PipelineResult:
         """Run Viralagenda pipeline with full streaming.
 
-        Fetches details, enriches, and inserts in batches of 5.
+        Fetches details, enriches, and inserts in batches of N.
         Each batch is saved immediately, so crashes don't lose all progress.
+        Uses ``_process_batch()`` for the shared enrich -> images -> insert logic.
         """
         batch_size = self.config.streaming_batch_size
-        total_inserted = 0
-        total_skipped = 0
-        total_failed = 0
-        total_images = 0
-        total_enriched = 0
-        total_raw = 0
-        total_parsed = 0
-        all_events = []  # For category/province stats
+        all_events: list[EventCreate] = []  # For category/province stats
 
         try:
             logger.info(
@@ -379,15 +375,17 @@ class InsertionPipeline:
             )
 
             # Use streaming generator from adapter
+            batch_num = 0
             async for raw_batch in self.adapter.fetch_events_streaming(
                 batch_size=batch_size,
                 limit=self.config.limit,
             ):
-                total_raw += len(raw_batch)
+                batch_num += 1
+                result.raw_count += len(raw_batch)
 
                 # Parse and filter batch
                 events, skipped = self._parse_and_filter(raw_batch)
-                total_parsed += len(events)
+                result.parsed_count += len(events)
                 result.skipped_past += skipped
 
                 if not events:
@@ -400,50 +398,20 @@ class InsertionPipeline:
                     if not events:
                         continue
 
-                # Enrich batch
-                batch_enrichments = {}
-                if not self.config.skip_enrichment:
-                    batch_enrichments = self._run_enrichment(events)
-                    self._apply_enrichments(events, batch_enrichments)
-                    total_enriched += len(batch_enrichments)
-
-                # Fetch images for batch
-                if not self.config.skip_images:
-                    images = self._fetch_images(events, batch_enrichments)
-                    total_images += images
-
-                # Insert batch immediately (unless dry run)
-                if self.config.dry_run:
-                    logger.info(
-                        "streaming_batch_dry_run",
-                        source=self.config.source_slug,
-                        would_insert=len(events),
-                    )
-                else:
-                    stats = await self._insert_events(events)
-                    total_inserted += stats["inserted"]
-                    total_skipped += stats["skipped"]
-                    total_failed += stats["failed"]
-
-                    logger.info(
-                        "streaming_batch_inserted",
-                        source=self.config.source_slug,
-                        inserted=stats["inserted"],
-                        total_so_far=total_inserted,
-                    )
+                # Enrich, fetch images, insert -- shared logic
+                # For viralagenda streaming, each batch is small so use
+                # non-streaming mode within _process_batch (no sub-batching)
+                await self._process_batch(events, result)
 
                 # Collect for stats
                 all_events.extend(events)
 
-            # Update result
-            result.raw_count = total_raw
-            result.parsed_count = total_parsed
-            result.limited_count = total_parsed
-            result.enriched_count = total_enriched
-            result.images_found = total_images
-            result.inserted_count = total_inserted
-            result.skipped_existing = total_skipped
-            result.failed_count = total_failed
+                # Periodic memory cleanup to prevent OOM
+                if batch_num % CLEANUP_EVERY_N_BATCHES == 0:
+                    _cleanup_memory()
+
+            # Update distributions and mark success
+            result.limited_count = result.parsed_count
             result.categories = self._count_categories(all_events)
             result.provinces = self._count_provinces(all_events)
             result.success = True
@@ -451,8 +419,8 @@ class InsertionPipeline:
             logger.info(
                 "streaming_pipeline_complete",
                 source=self.config.source_slug,
-                total_inserted=total_inserted,
-                total_skipped=total_skipped,
+                total_inserted=result.inserted_count,
+                total_skipped=result.skipped_existing,
             )
 
         except Exception as e:
@@ -460,13 +428,10 @@ class InsertionPipeline:
                 "streaming_pipeline_error",
                 source=self.config.source_slug,
                 error=str(e),
-                inserted_before_error=total_inserted,
+                inserted_before_error=result.inserted_count,
             )
             result.success = False
             result.error = str(e)
-            # Still update counts for what we did process
-            result.inserted_count = total_inserted
-            result.skipped_existing = total_skipped
 
         finally:
             # Cleanup: close any Playwright browser to prevent orphan processes

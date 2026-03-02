@@ -25,23 +25,9 @@ from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.core.firecrawl_client import get_firecrawl_client
 from src.logging import get_logger
 
-logger = get_logger(__name__)
+from src.utils.date_parser import MONTHS_ES
 
-# Month names in Spanish
-MONTHS_ES = {
-    "ene": 1, "enero": 1,
-    "feb": 2, "febrero": 2,
-    "mar": 3, "marzo": 3,
-    "abr": 4, "abril": 4,
-    "may": 5, "mayo": 5,
-    "jun": 6, "junio": 6,
-    "jul": 7, "julio": 7,
-    "ago": 8, "agosto": 8,
-    "sep": 9, "sept": 9, "septiembre": 9,
-    "oct": 10, "octubre": 10,
-    "nov": 11, "noviembre": 11,
-    "dic": 12, "diciembre": 12,
-}
+logger = get_logger(__name__)
 
 
 @register_adapter("vacacionesseniors")
@@ -60,12 +46,12 @@ class VacacionesSeniorsAdapter(BaseAdapter):
     # Config
     BASE_URL = "https://vacacionesseniors.com"
     LISTING_URL = "https://vacacionesseniors.com/circuitos-culturales-salidas-desde-madrid/"
+    MAX_EVENTS = 100
 
     async def fetch_events(
         self,
         enrich: bool = True,
         fetch_details: bool = True,
-        max_events: int = 100,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
@@ -74,7 +60,6 @@ class VacacionesSeniorsAdapter(BaseAdapter):
         Args:
             enrich: Not used (LLM enrichment done in pipeline)
             fetch_details: If True, fetch detail pages for full data
-            max_events: Maximum number of events to fetch
             limit: If set, applies early limit
 
         Returns:
@@ -82,7 +67,7 @@ class VacacionesSeniorsAdapter(BaseAdapter):
         """
         events = []
         seen_urls = set()
-        effective_max = min(max_events, limit) if limit else max_events
+        effective_max = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
 
         try:
             self.logger.info("fetching_vacacionesseniors", url=self.LISTING_URL)

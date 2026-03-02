@@ -29,7 +29,6 @@ Page structure:
 """
 
 import asyncio
-import hashlib
 import re
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -41,6 +40,7 @@ from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.logging import get_logger
+from src.utils.ids import make_external_id
 
 logger = get_logger(__name__)
 
@@ -72,8 +72,7 @@ WEEKS_AHEAD = 4
 
 
 def _make_external_id(title: str, event_date: date) -> str:
-    raw = f"{title.strip().lower()[:80]}_{event_date.isoformat()}"
-    return f"jgpa_{hashlib.md5(raw.encode()).hexdigest()[:12]}"
+    return make_external_id("jgpa", title.strip().lower()[:80], event_date.isoformat())
 
 
 def _parse_liferay_date(text: str) -> date | None:
@@ -114,61 +113,59 @@ class JgpaAdapter(BaseAdapter):
     ccaa_code = "AS"
     adapter_type = AdapterType.STATIC
     tier = "bronze"
+    MAX_EVENTS = 200
 
     async def fetch_events(
         self,
         enrich: bool = True,
         fetch_details: bool = False,
-        max_events: int = 200,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
         seen_ids: set[str] = set()
 
         today = date.today()
 
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                for week_offset in range(WEEKS_AHEAD):
-                    week_start = today + timedelta(weeks=week_offset)
-                    # Monday of that week
-                    monday = week_start - timedelta(days=week_start.weekday())
-                    url = f"{WEEK_URL}/{monday:%d}/{monday:%m}/{monday:%Y}"
+            for week_offset in range(WEEKS_AHEAD):
+                week_start = today + timedelta(weeks=week_offset)
+                # Monday of that week
+                monday = week_start - timedelta(days=week_start.weekday())
+                url = f"{WEEK_URL}/{monday:%d}/{monday:%m}/{monday:%Y}"
 
-                    self.logger.info("fetching_jgpa_week", url=url, week=week_offset)
+                self.logger.info("fetching_jgpa_week", url=url, week=week_offset)
 
-                    try:
-                        response = await client.get(url)
-                        if response.status_code == 404:
-                            self.logger.info("jgpa_week_not_found", week=week_offset)
-                            continue
-                        response.raise_for_status()
-                    except httpx.HTTPStatusError as e:
+                try:
+                    response = await self.fetch_url(url)
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 404:
+                        self.logger.info("jgpa_week_not_found", week=week_offset)
+                    else:
                         self.logger.warning(
                             "week_fetch_error", week=week_offset,
                             status=e.response.status_code,
                         )
-                        continue
+                    continue
 
-                    week_events = self._parse_week_page(response.text)
+                week_events = self._parse_week_page(response.text)
 
-                    for ev in week_events:
-                        if ev["external_id"] not in seen_ids:
-                            seen_ids.add(ev["external_id"])
-                            events.append(ev)
-                            if len(events) >= effective_limit:
-                                break
+                for ev in week_events:
+                    if ev["external_id"] not in seen_ids:
+                        seen_ids.add(ev["external_id"])
+                        events.append(ev)
+                        if len(events) >= effective_limit:
+                            break
 
-                    self.logger.info(
-                        "jgpa_week_parsed", week=week_offset, found=len(week_events),
-                    )
+                self.logger.info(
+                    "jgpa_week_parsed", week=week_offset, found=len(week_events),
+                )
 
-                    if len(events) >= effective_limit:
-                        break
+                if len(events) >= effective_limit:
+                    break
 
-                    await asyncio.sleep(0.5)
+                await asyncio.sleep(0.5)
 
             self.logger.info("jgpa_total_events", count=len(events))
 

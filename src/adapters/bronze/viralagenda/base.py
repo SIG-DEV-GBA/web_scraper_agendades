@@ -428,6 +428,7 @@ class ViralAgendaAdapter(BaseAdapter):
         enrich: bool = False,
         fetch_details: bool = True,
         limit: int | None = None,
+        **kwargs,
     ) -> list[dict[str, Any]]:
         """Fetch events from Viralagenda.
 
@@ -435,6 +436,7 @@ class ViralAgendaAdapter(BaseAdapter):
             enrich: Not used (LLM enrichment done in pipeline)
             fetch_details: If True, fetch detail pages for descriptions
             limit: Max number of events to fetch (limits cards before detail fetch)
+            **kwargs: Forward-compatible keyword arguments.
 
         Returns:
             List of raw event dictionaries

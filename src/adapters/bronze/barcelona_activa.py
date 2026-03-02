@@ -22,14 +22,9 @@ from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.logging import get_logger
+from src.utils.date_parser import MONTHS_ES
 
 logger = get_logger(__name__)
-
-MONTHS_ES = {
-    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-    "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-    "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-}
 
 
 def _fuzzy_month(text: str) -> int | None:
@@ -85,17 +80,18 @@ class BarcelonaActivaAdapter(BaseAdapter):
     ccaa_code = "CT"
     adapter_type = AdapterType.STATIC
     tier = "bronze"
+    MAX_EVENTS = 200
 
     async def fetch_events(
         self,
         enrich: bool = True,
-        max_events: int = 200,
+        fetch_details: bool = True,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Fetch activities via Tavily extract."""
         events: list[dict[str, Any]] = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
 
         tavily_key = os.environ.get("TAVILY_API_KEY", "")
         if not tavily_key:

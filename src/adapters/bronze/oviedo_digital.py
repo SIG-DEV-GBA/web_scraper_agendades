@@ -19,7 +19,6 @@ import re
 from datetime import date, time as dt_time, timedelta
 from typing import Any
 
-import httpx
 from bs4 import BeautifulSoup, Tag
 
 from src.adapters import register_adapter
@@ -27,13 +26,9 @@ from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventContact, EventCreate, EventOrganizer, LocationType
 from src.logging import get_logger
 
-logger = get_logger(__name__)
+from src.utils.date_parser import MONTHS_ES
 
-MONTHS_ES = {
-    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-    "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-    "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-}
+logger = get_logger(__name__)
 
 MONTH_NAMES_ES = {
     1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
@@ -129,36 +124,21 @@ class OviedoDigitalAdapter(BaseAdapter):
     tier = "bronze"
 
     LISTING_URL = "https://centrosocialvirtualoviedo.es/actividades"
+    MAX_EVENTS = 500
 
     async def fetch_events(
         self,
         enrich: bool = True,
         fetch_details: bool = False,
-        max_events: int = 500,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Fetch all activities from the page."""
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
 
         try:
             self.logger.info("fetching_oviedo", url=self.LISTING_URL)
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            }
-            async with httpx.AsyncClient(timeout=60, follow_redirects=True, headers=headers) as client:
-                for attempt in range(3):
-                    try:
-                        response = await client.get(self.LISTING_URL)
-                        response.raise_for_status()
-                        break
-                    except (httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
-                        if attempt < 2:
-                            self.logger.warning("retry_fetch", attempt=attempt + 1, error=str(e))
-                            import asyncio
-                            await asyncio.sleep(2 * (attempt + 1))
-                        else:
-                            raise
+            response = await self.fetch_url(self.LISTING_URL)
 
             soup = BeautifulSoup(response.text, "html.parser")
             tab_modules = soup.find_all("div", class_="et_pb_tabs")

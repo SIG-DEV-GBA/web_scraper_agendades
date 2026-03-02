@@ -45,12 +45,14 @@ class NavarraAdapter(BaseAdapter):
     # Detail page
     DETAIL_DATE_SELECTOR = ".fecha"  # Format: DD/MM/YYYY - DD/MM/YYYY
 
-    async def fetch_events(self, enrich: bool = True, fetch_details: bool = True) -> list[dict[str, Any]]:
+    async def fetch_events(self, enrich: bool = True, fetch_details: bool = True, limit: int | None = None, **kwargs) -> list[dict[str, Any]]:
         """Fetch events from Cultura Navarra.
 
         Args:
             enrich: Not used (LLM enrichment done in pipeline)
             fetch_details: If True, fetch detail pages for descriptions
+            limit: Maximum number of events to return. If None, returns all.
+            **kwargs: Forward-compatible keyword arguments.
 
         Returns:
             List of raw event dictionaries

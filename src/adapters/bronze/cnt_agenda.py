@@ -12,7 +12,6 @@ the detail page with full description.
 """
 
 import asyncio
-import hashlib
 import re
 from datetime import date
 from typing import Any
@@ -24,14 +23,10 @@ from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.logging import get_logger
+from src.utils.date_parser import MONTHS_ES
+from src.utils.ids import make_external_id
 
 logger = get_logger(__name__)
-
-MONTHS_ES = {
-    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-    "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-    "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-}
 
 # Date pattern: "28 noviembre, 2025" or "3 marzo 2026"
 DATE_PATTERN = re.compile(
@@ -45,8 +40,7 @@ LISTING_URL = f"{BASE_URL}/noticias/category/noticias/agenda/"
 
 def _make_external_id(title: str, event_date: date) -> str:
     """Generate a stable external_id from title + date."""
-    raw = f"{title.strip().lower()}_{event_date.isoformat()}"
-    return f"cnt_{hashlib.md5(raw.encode()).hexdigest()[:12]}"
+    return make_external_id("cnt", title, event_date.isoformat())
 
 
 @register_adapter("cnt_agenda")
@@ -62,15 +56,15 @@ class CntAgendaAdapter(BaseAdapter):
     tier = "bronze"
 
     MAX_PAGES = 5
+    MAX_EVENTS = 200
 
     async def _fetch_detail(
-        self, client: httpx.AsyncClient, detail_url: str,
+        self, detail_url: str,
     ) -> dict[str, Any]:
         """Fetch detail page for date, full description and og:image."""
         result: dict[str, Any] = {}
         try:
-            resp = await client.get(detail_url)
-            resp.raise_for_status()
+            resp = await self.fetch_url(detail_url)
         except Exception as e:
             self.logger.debug("detail_fetch_error", url=detail_url, error=str(e))
             return result
@@ -126,83 +120,78 @@ class CntAgendaAdapter(BaseAdapter):
         self,
         enrich: bool = True,
         fetch_details: bool = True,
-        max_events: int = 200,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Fetch events from CNT archive with WordPress pagination."""
         events: list[dict[str, Any]] = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
         seen_ids: set[str] = set()
 
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                for page in range(1, self.MAX_PAGES + 1):
-                    if page == 1:
-                        url = LISTING_URL
-                    else:
-                        url = f"{LISTING_URL}page/{page}/"
+            for page in range(1, self.MAX_PAGES + 1):
+                if page == 1:
+                    url = LISTING_URL
+                else:
+                    url = f"{LISTING_URL}page/{page}/"
 
-                    self.logger.info("fetching_cnt_page", url=url, page=page)
+                self.logger.info("fetching_cnt_page", url=url, page=page)
 
-                    try:
-                        response = await client.get(url)
-                        if response.status_code == 404:
-                            self.logger.info("no_more_pages", page=page)
-                            break
-                        response.raise_for_status()
-                    except httpx.HTTPStatusError as e:
-                        if e.response.status_code == 404:
-                            break
-                        raise
-
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    articles = soup.find_all("article")
-
-                    if not articles:
-                        self.logger.info("no_articles_found", page=page)
+                try:
+                    response = await self.fetch_url(url)
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 404:
+                        self.logger.info("no_more_pages", page=page)
                         break
+                    raise
 
-                    page_count = 0
-                    for article in articles:
-                        event_data = self._parse_card(article)
-                        if not event_data:
+                soup = BeautifulSoup(response.text, "html.parser")
+                articles = soup.find_all("article")
+
+                if not articles:
+                    self.logger.info("no_articles_found", page=page)
+                    break
+
+                page_count = 0
+                for article in articles:
+                    event_data = self._parse_card(article)
+                    if not event_data:
+                        continue
+
+                    # Dates are only on detail pages — always fetch
+                    detail_url = event_data.get("detail_url")
+                    if detail_url and detail_url not in seen_ids:
+                        seen_ids.add(detail_url)
+                        await asyncio.sleep(0.5)
+                        detail = await self._fetch_detail(detail_url)
+                        event_data.update(detail)
+
+                        # Skip if no date found
+                        start_date = event_data.get("start_date")
+                        if not start_date:
+                            self.logger.debug(
+                                "no_date_found", title=event_data["title"],
+                            )
                             continue
 
-                        # Dates are only on detail pages — always fetch
-                        detail_url = event_data.get("detail_url")
-                        if detail_url and detail_url not in seen_ids:
-                            seen_ids.add(detail_url)
-                            await asyncio.sleep(0.5)
-                            detail = await self._fetch_detail(client, detail_url)
-                            event_data.update(detail)
+                        # Generate external_id now that we have the date
+                        event_data["external_id"] = _make_external_id(
+                            event_data["title"], start_date,
+                        )
 
-                            # Skip if no date found
-                            start_date = event_data.get("start_date")
-                            if not start_date:
-                                self.logger.debug(
-                                    "no_date_found", title=event_data["title"],
-                                )
-                                continue
+                        events.append(event_data)
+                        page_count += 1
 
-                            # Generate external_id now that we have the date
-                            event_data["external_id"] = _make_external_id(
-                                event_data["title"], start_date,
-                            )
+                        if len(events) >= effective_limit:
+                            break
 
-                            events.append(event_data)
-                            page_count += 1
+                self.logger.info("cnt_page_parsed", page=page, found=page_count)
 
-                            if len(events) >= effective_limit:
-                                break
+                if len(events) >= effective_limit:
+                    break
 
-                    self.logger.info("cnt_page_parsed", page=page, found=page_count)
-
-                    if len(events) >= effective_limit:
-                        break
-
-                    if page_count == 0:
-                        break
+                if page_count == 0:
+                    break
 
             self.logger.info("cnt_total_events", count=len(events))
 

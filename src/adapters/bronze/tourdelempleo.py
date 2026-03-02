@@ -10,26 +10,20 @@ Uses Elementor grid layout with .ue-grid-item cards containing
 title, date, description, and links. Single page, no pagination.
 """
 
-import hashlib
 import re
 from datetime import date
 from typing import Any
 
-import httpx
 from bs4 import BeautifulSoup
 
 from src.adapters import register_adapter
 from src.core.base_adapter import AdapterType, BaseAdapter
 from src.core.event_model import EventCreate, EventOrganizer, LocationType
 from src.logging import get_logger
+from src.utils.date_parser import MONTHS_ES
+from src.utils.ids import make_external_id
 
 logger = get_logger(__name__)
-
-MONTHS_ES = {
-    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4,
-    "mayo": 5, "junio": 6, "julio": 7, "agosto": 8,
-    "septiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
-}
 
 LISTING_URL = "https://www.tourdelempleo.com/ferias/"
 
@@ -52,8 +46,7 @@ DATE_SINGLE_RE = re.compile(
 
 
 def _make_external_id(title: str, event_date: date) -> str:
-    raw = f"{title.strip().lower()}_{event_date.isoformat()}"
-    return f"tourempleo_{hashlib.md5(raw.encode()).hexdigest()[:12]}"
+    return make_external_id("tourempleo", title, event_date.isoformat())
 
 
 def _extract_city_from_title(title: str) -> str:
@@ -128,39 +121,39 @@ class TourDelEmpleoAdapter(BaseAdapter):
     adapter_type = AdapterType.STATIC
     tier = "bronze"
 
+    MAX_EVENTS = 200
+
     async def fetch_events(
         self,
         enrich: bool = True,
-        max_events: int = 200,
+        fetch_details: bool = True,
         limit: int | None = None,
         **kwargs,
     ) -> list[dict[str, Any]]:
         """Fetch employment fairs from tourdelempleo (single page)."""
         events: list[dict[str, Any]] = []
-        effective_limit = min(max_events, limit) if limit else max_events
+        effective_limit = min(self.MAX_EVENTS, limit) if limit else self.MAX_EVENTS
 
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                self.logger.info("fetching_tourdelempleo", url=LISTING_URL)
+            self.logger.info("fetching_tourdelempleo", url=LISTING_URL)
 
-                response = await client.get(LISTING_URL)
-                response.raise_for_status()
+            response = await self.fetch_url(LISTING_URL)
 
-                soup = BeautifulSoup(response.text, "html.parser")
+            soup = BeautifulSoup(response.text, "html.parser")
 
-                # Cards: .ue-grid-item with data-link and data-postid
-                grid_items = soup.select(".ue-grid-item")
+            # Cards: .ue-grid-item with data-link and data-postid
+            grid_items = soup.select(".ue-grid-item")
 
-                if not grid_items:
-                    self.logger.info("no_grid_items_found")
-                    return events
+            if not grid_items:
+                self.logger.info("no_grid_items_found")
+                return events
 
-                for item in grid_items:
-                    event_data = self._parse_card(item)
-                    if event_data:
-                        events.append(event_data)
-                        if len(events) >= effective_limit:
-                            break
+            for item in grid_items:
+                event_data = self._parse_card(item)
+                if event_data:
+                    events.append(event_data)
+                    if len(events) >= effective_limit:
+                        break
 
             self.logger.info("tourdelempleo_total_events", count=len(events))
 
