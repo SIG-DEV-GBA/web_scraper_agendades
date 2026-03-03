@@ -69,7 +69,7 @@ async def get_stats():
 
 
 @router.get("/quality", response_model=QualityMetrics)
-async def get_quality_metrics(limit: int = Query(100, description="Number of recent events to analyze")):
+async def get_quality_metrics(limit: int = Query(100, ge=1, le=500, description="Number of recent events to analyze")):
     """Get quality metrics for recent events."""
     sb = get_supabase_client()
 

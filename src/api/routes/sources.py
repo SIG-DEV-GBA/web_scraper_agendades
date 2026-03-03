@@ -151,4 +151,6 @@ async def get_source(slug: str):
             "events_in_db": event_count,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        from src.logging import get_logger
+        get_logger(__name__).error("source_detail_error", slug=slug, error=str(e), exc_info=True)
+        raise HTTPException(status_code=500, detail="Error interno del servidor")

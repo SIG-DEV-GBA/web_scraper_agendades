@@ -4,8 +4,10 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+
+from src.api.auth import require_api_key
 
 from src.config.sources import SourceRegistry, SourceTier
 from src.core.pipeline import run_pipeline, PipelineResult
@@ -32,11 +34,11 @@ import src.config.sources.bronze_sources  # noqa
 
 class ScrapeRequest(BaseModel):
     """Request to start a scrape job."""
-    sources: list[str] | None = Field(None, description="List of source slugs to scrape")
-    tier: str | None = Field(None, description="Tier to scrape (gold, silver, bronze)")
-    province: str | None = Field(None, description="Province to scrape (e.g., 'zamora', 'madrid')")
-    ccaa: str | None = Field(None, description="CCAA to scrape (e.g., 'castilla y leon', 'andalucia')")
-    limit: int = Field(10, ge=1, description="Max events per source (default: 10)")
+    sources: list[str] | None = Field(None, max_length=50, description="List of source slugs to scrape")
+    tier: str | None = Field(None, pattern=r"^(gold|silver|bronze)$", description="Tier to scrape (gold, silver, bronze)")
+    province: str | None = Field(None, max_length=100, description="Province to scrape (e.g., 'zamora', 'madrid')")
+    ccaa: str | None = Field(None, max_length=100, description="CCAA to scrape (e.g., 'castilla y leon', 'andalucia')")
+    limit: int = Field(10, ge=1, le=100, description="Max events per source (default: 10)")
     dry_run: bool = Field(False, description="Don't save to database")
 
 
@@ -263,7 +265,7 @@ async def run_scrape_job(
 
 
 @router.post("", response_model=ScrapeResponse)
-async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks):
+async def start_scrape(request: ScrapeRequest, background_tasks: BackgroundTasks, _: str = Depends(require_api_key)):
     """Start a new scrape job.
 
     Filters (use one):
@@ -385,7 +387,7 @@ async def get_job_logs(job_id: str, since: int = 0):
 
 
 @router.get("/jobs")
-async def list_jobs_endpoint(limit: int = 20):
+async def list_jobs_endpoint(limit: int = Query(20, ge=1, le=100)):
     """List all scrape jobs with summary info."""
     jobs_list = list_jobs_from_store(limit=limit)
 
@@ -397,7 +399,7 @@ async def list_jobs_endpoint(limit: int = 20):
 
 
 @router.delete("/jobs/{job_id}")
-async def delete_job_endpoint(job_id: str):
+async def delete_job_endpoint(job_id: str, _: str = Depends(require_api_key)):
     """Delete a completed job from database."""
     job = get_job(job_id)
     if not job:
@@ -528,12 +530,12 @@ async def preview_source(source_slug: str, limit: int | None = None):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("preview_error", source=source_slug, error=str(e))
+        logger.error("preview_error", source=source_slug, error=str(e), exc_info=True)
         return PreviewResponse(
             source=source_slug,
             raw_count=0,
             valid_count=0,
-            error=str(e),
+            error="Error al obtener preview",
         )
 
 
@@ -587,6 +589,7 @@ async def get_viralagenda_counts() -> dict[str, int]:
 async def batch_viralagenda(
     request: BatchViralAgendaRequest,
     background_tasks: BackgroundTasks,
+    _: str = Depends(require_api_key),
 ):
     """Run batch scraping for all valid Viralagenda sources.
 

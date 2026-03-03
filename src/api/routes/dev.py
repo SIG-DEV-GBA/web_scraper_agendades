@@ -3,8 +3,9 @@
 import os
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from src.api.auth import require_api_key
 from src.logging import get_logger
 
 logger = get_logger(__name__)
@@ -16,12 +17,8 @@ WEB_URL = os.getenv("WEB_URL", "https://www.agendades.es")
 
 
 @router.post("/revalidate")
-async def revalidate_web_cache():
-    """Invalidate the web cache to see new events immediately.
-
-    Calls the web's /api/revalidate endpoint to force ISR regeneration.
-    Use this after inserting test events to see them instantly.
-    """
+async def revalidate_web_cache(_: str = Depends(require_api_key)):
+    """Invalidate the web cache to see new events immediately."""
     revalidate_url = f"{WEB_URL}/api/revalidate"
 
     try:
@@ -40,20 +37,19 @@ async def revalidate_web_cache():
                 logger.warning(
                     "web_cache_invalidate_failed",
                     status=response.status_code,
-                    body=response.text[:200],
                 )
                 raise HTTPException(
-                    status_code=response.status_code,
-                    detail=f"Web responded with {response.status_code}: {response.text[:200]}",
+                    status_code=502,
+                    detail="Error al invalidar cache de la web",
                 )
 
     except httpx.TimeoutException:
         logger.error("web_cache_invalidate_timeout", url=revalidate_url)
-        raise HTTPException(status_code=504, detail="Timeout calling web revalidate")
+        raise HTTPException(status_code=504, detail="Timeout al contactar la web")
 
     except httpx.RequestError as e:
         logger.error("web_cache_invalidate_error", error=str(e))
-        raise HTTPException(status_code=502, detail=f"Error calling web: {str(e)}")
+        raise HTTPException(status_code=502, detail="Error de conexion con la web")
 
 
 @router.get("/status")
@@ -63,6 +59,6 @@ async def dev_status():
         "web_url": WEB_URL,
         "revalidate_endpoint": f"{WEB_URL}/api/revalidate",
         "endpoints": [
-            "POST /dev/revalidate - Invalidate web cache",
+            "POST /dev/revalidate - Invalidate web cache (requires API key)",
         ],
     }

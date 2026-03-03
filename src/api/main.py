@@ -4,33 +4,34 @@ Run with:
     uvicorn src.api.main:app --reload --port 8000
 """
 
+import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from src.api.routes import sources, scrape, runs, scheduler, dev
 from src.core.job_store import mark_interrupted_jobs
 from src.logging import get_logger
 
-# Scheduler disabled - using external cron job on VPS instead
-# from src.scheduler import init_scheduler
-
 logger = get_logger(__name__)
+
+# --- Rate Limiter (shared instance) ---
+limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
-    # Mark any jobs that were running when we crashed as interrupted
     interrupted = mark_interrupted_jobs()
     if interrupted:
         logger.info("startup_cleanup", jobs_marked_interrupted=interrupted)
-
-    # Internal scheduler disabled - using external cron job on VPS
-    # init_scheduler()
     yield
-    # Shutdown: Nothing to clean up
 
 
 app = FastAPI(
@@ -40,14 +41,40 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS for frontend access
+# --- Rate limiter ---
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# --- CORS (restrictive) ---
+ALLOWED_ORIGINS = os.getenv(
+    "ALLOWED_ORIGINS",
+    "https://agendades.es,https://www.agendades.es,http://localhost:3000",
+).split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción, restringir a dominios específicos
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE"],
+    allow_headers=["Authorization", "Content-Type", "X-API-Key"],
 )
+
+# --- Trusted Host (production only) ---
+ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "").split(",")
+if ALLOWED_HOSTS and ALLOWED_HOSTS[0]:
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+
+
+# --- Security Headers ---
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
 
 # Include routers
 app.include_router(sources.router, prefix="/sources", tags=["Sources"])
@@ -74,12 +101,12 @@ async def health():
 
     try:
         sb = get_supabase_client()
-        # Quick DB check
         result = sb.client.table("events").select("id", count="exact").limit(1).execute()
         db_status = "connected"
         event_count = result.count
     except Exception as e:
-        db_status = f"error: {str(e)}"
+        logger.error("health_check_db_error", error=str(e))
+        db_status = "error"
         event_count = 0
 
     return {
@@ -87,5 +114,4 @@ async def health():
         "database": db_status,
         "events_in_db": event_count,
         "scheduler": "external_cron",
-        "next_scrape": "Monday 00:01 (cron)",
     }
