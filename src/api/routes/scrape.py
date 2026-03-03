@@ -659,3 +659,88 @@ async def batch_viralagenda(
         sources_skipped=len(sources_skipped),
         sources=sources_to_run,
     )
+
+
+# ============================================================
+# BATCH FULL ENDPOINT (for scheduled cron jobs)
+# ============================================================
+
+class BatchFullRequest(BaseModel):
+    """Request for full scrape of all sources."""
+    limit: int = Field(100, ge=1, le=200, description="Max events per source")
+    dry_run: bool = Field(False, description="Don't save to database")
+    tier: str | None = Field(None, pattern=r"^(gold|silver|bronze)$", description="Limit to specific tier")
+
+
+class BatchFullResponse(BaseModel):
+    """Response from batch full endpoint."""
+    job_id: str
+    status: JobStatus
+    message: str
+    sources_total: int
+    sources: list[str]
+
+
+@router.post("/batch/full", response_model=BatchFullResponse)
+async def batch_full_scrape(
+    request: BatchFullRequest,
+    background_tasks: BackgroundTasks,
+    _: str = Depends(require_api_key),
+):
+    """Run a full scrape of all registered sources (sequential).
+
+    Processes every source one by one with the unified pipeline.
+    Designed for scheduled cron jobs:
+    - Cron: 0 1 * * 1 (every Monday at 01:00)
+    - Command: curl -X POST http://localhost:8000/scrape/batch/full -H "X-API-Key: ..."
+    """
+    # Collect all sources, optionally filtered by tier
+    if request.tier:
+        tier_enum = SourceTier(request.tier)
+        all_sources = [s.slug for s in SourceRegistry.get_by_tier(tier_enum)]
+    else:
+        all_sources = [s.slug for s in SourceRegistry.all()]
+
+    if not all_sources:
+        return BatchFullResponse(
+            job_id="none",
+            status=JobStatus.COMPLETED,
+            message="No sources found",
+            sources_total=0,
+            sources=[],
+        )
+
+    # Create job
+    job_id = str(uuid4())[:8]
+    config = {
+        "sources": all_sources,
+        "filter": f"batch_full{f':{request.tier}' if request.tier else ''}",
+        "limit": request.limit,
+        "dry_run": request.dry_run,
+    }
+    create_job(job_id, all_sources, config)
+
+    # Run in background (sequential, one source at a time)
+    background_tasks.add_task(
+        run_scrape_job,
+        job_id,
+        all_sources,
+        request.limit,
+        request.dry_run,
+    )
+
+    logger.info(
+        "batch_full_started",
+        job_id=job_id,
+        sources=len(all_sources),
+        limit=request.limit,
+        tier=request.tier,
+    )
+
+    return BatchFullResponse(
+        job_id=job_id,
+        status=JobStatus.PENDING,
+        message=f"Full scrape started: {len(all_sources)} sources, limit={request.limit}",
+        sources_total=len(all_sources),
+        sources=all_sources,
+    )
