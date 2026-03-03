@@ -708,6 +708,10 @@ class InsertionPipeline:
                     reason="adapter_fixed",
                 )
 
+            # Fallback: default to "cultural" if still no category
+            if not event.category_slugs:
+                event.category_slugs = ["cultural"]
+
             # Summary
             if enrichment.summary:
                 event.summary = enrichment.summary
