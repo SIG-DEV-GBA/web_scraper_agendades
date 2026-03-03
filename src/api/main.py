@@ -48,7 +48,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # --- CORS (restrictive) ---
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
-    "https://agendades.es,https://www.agendades.es,http://localhost:3000",
+    "https://agendades.es,https://www.agendades.es,https://scraper.agendades.es,http://localhost:3000",
 ).split(",")
 
 app.add_middleware(
