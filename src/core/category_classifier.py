@@ -1,8 +1,8 @@
-"""Category classifier using embeddings + LLM hybrid approach.
+"""Category classifier using LLM + embeddings fallback.
 
 This module provides semantic classification of events using:
-1. Pre-computed category embeddings for fast similarity matching
-2. LLM fallback for ambiguous cases
+1. LLM classification (Groq) as primary method — 86%+ accuracy
+2. Pre-computed category embeddings as fallback when LLM is unavailable
 
 Categories are aligned with the Agendades social program for elderly inclusion:
 - cultural: Participación Cultural (arte, música, teatro, literatura, deporte)
@@ -12,11 +12,8 @@ Categories are aligned with the Agendades social program for elderly inclusion:
 - tecnologia: Participación Tecnológica (digital, informática, brecha digital)
 - sanitaria: Participación Sanitaria (salud, bienestar, prevención, apoyo mutuo)
 
-Flow:
-1. LLM normalizes raw text → clean, contextual description
-2. Generate embedding of normalized text
-3. Compare with category embeddings via cosine similarity
-4. Assign best matching category above confidence threshold
+IMPORTANT: Only these 6 categories are valid. The classifier MUST NOT invent
+new categories (e.g. "deportiva", "educativa"). Sports → sanitaria.
 """
 
 import json
@@ -49,6 +46,7 @@ CATEGORY_DESCRIPTIONS = {
         sin que la edad importe. Mejora la calidad de vida, mantiene la mente activa,
         promueve la creatividad y fortalece la identidad social.
         Incluye: conciertos de música clásica, jazz, rock, pop, folk, indie.
+        Conciertos conmemorativos, homenajes musicales, galas benéficas con actuación.
         Teatro, obras dramáticas, comedias, musicales, monólogos, stand-up.
         Danza contemporánea, ballet, flamenco, danza urbana.
         Cine, proyecciones, festivales de cine, documentales, estrenos.
@@ -62,6 +60,7 @@ CATEGORY_DESCRIPTIONS = {
         Talleres artísticos, manualidades, cerámica, pintura.
         Visitas guiadas, excursiones culturales, rutas turísticas.
         Espectáculos, circo, magia, humor.
+        Premios literarios, premios de cine, premios artísticos.
     """,
 
     "social": """
@@ -81,6 +80,13 @@ CATEGORY_DESCRIPTIONS = {
         Convivencias intergeneracionales, intercambio de experiencias.
         Grupos de apoyo, tertulias, cafés sociales.
         Actividades contra la soledad no deseada.
+        Ecología, medio ambiente, sostenibilidad, reciclaje, cambio climático.
+        Huertos urbanos, huertos comunitarios, agricultura social, jardines vecinales.
+        Cuidado del planeta, conciencia medioambiental, naturaleza, biodiversidad.
+        Igualdad de género, día de la mujer, violencia de género, feminismo.
+        Premios de igualdad, observatorio contra la violencia doméstica.
+        Derechos sociales, inclusión, diversidad, accesibilidad.
+        Empoderamiento, activismo social, campañas de concienciación.
     """,
 
     "economica": """
@@ -89,6 +95,7 @@ CATEGORY_DESCRIPTIONS = {
         Reivindicar pensiones dignas, aportar experiencia al mercado laboral y ser
         parte activa de una economía que reconoce y valora la contribución.
         Incluye: ferias de empleo, bolsas de trabajo, orientación laboral.
+        Búsqueda activa de empleo, elaboración de currículum, CV, entrevistas.
         Cursos de emprendimiento, startups, incubadoras.
         Networking empresarial, encuentros profesionales.
         Formación profesional, cursos técnicos, certificaciones.
@@ -100,6 +107,11 @@ CATEGORY_DESCRIPTIONS = {
         Eventos de cámaras de comercio, asociaciones empresariales.
         Economía social, cooperativas, comercio justo.
         Asesoramiento fiscal, legal, derechos del consumidor.
+        Gestión de almacén, logística, operaciones en caja, retail, comercio.
+        Coaching profesional, desarrollo de carrera, liderazgo empresarial.
+        Monitor de ocio, monitor de tiempo libre, animación sociocultural.
+        Atención al cliente, habilidades comerciales, telemarketing.
+        Hostelería, turismo, camarero, cocina profesional.
     """,
 
     "politica": """
@@ -134,6 +146,10 @@ CATEGORY_DESCRIPTIONS = {
         Ciberseguridad, privacidad digital, protección de datos.
         Alfabetización digital, reducción de la brecha digital.
         Hackathons, eventos maker, Arduino, Raspberry Pi.
+        Ofimática, procesador de texto, hojas de cálculo, presentaciones.
+        Certificado digital, firma electrónica, DNI electrónico.
+        Copias de seguridad, almacenamiento en la nube, backup.
+        Diseño gráfico, edición de fotos, edición de vídeo.
     """,
 
     "sanitaria": """
@@ -145,13 +161,17 @@ CATEGORY_DESCRIPTIONS = {
         Incluye: clases de yoga, pilates, tai chi, meditación, mindfulness.
         Charlas de salud, prevención de enfermedades, jornadas médicas.
         Campañas de vacunación, donación de sangre.
-        Talleres de nutrición, alimentación saludable.
+        Talleres de nutrición, alimentación saludable, comer bien, dieta equilibrada.
+        Elegir alimentos, comer de temporada, nutrición, hábitos alimentarios.
+        Diabetes, enfermedades crónicas, hipertensión, colesterol, obesidad.
         Salud mental, bienestar emocional, psicología, grupos de apoyo.
         Ejercicio físico saludable: gimnasia suave, paseos, aquagym.
-        Primeros auxilios, RCP, cursos de emergencias.
+        Primeros auxilios, RCP, cursos de emergencias, socorrismo.
         Terapias alternativas, acupuntura, naturopatía.
         Charlas sobre envejecimiento activo, autonomía personal.
         Jornadas de detección precoz, revisiones, chequeos.
+        Bienestar para personas mayores, programas de salud, autocuidado.
+        Salud digital, apps de salud, telemedicina, cita médica online.
     """,
 }
 
@@ -335,8 +355,33 @@ def is_children_only(title: str, description: str = "", use_embeddings: bool = T
     return True
 
 
+# ============================================================
+# LLM CLASSIFICATION PROMPT
+# ============================================================
+
+_LLM_CLASSIFY_SYSTEM = """Eres un clasificador de eventos para Agendades, una agenda de actividades para personas mayores en España.
+Clasifica cada evento en UNA sola categoría según su PROPÓSITO PRINCIPAL para el público mayor.
+
+IMPORTANTE: Considera el contexto del programa del que proviene el evento.
+- Un "Baile Zumba" en un programa de bienestar para mayores es SANITARIA (ejercicio), no cultural.
+- Una "Lectura compartida" en un programa contra la soledad es SOCIAL (combatir aislamiento), no cultural.
+- La agenda de un ministro es POLITICA aunque visite un museo.
+- Un taller de ChatGPT para emprendedores es ECONOMICA, no tecnologia.
+- Eventos deportivos como ejercicio o bienestar son SANITARIA, no inventar "deportiva".
+
+Categorías (SOLO estas 6, no inventes nuevas):
+- cultural: Espectáculos, conciertos, teatro, cine, exposiciones, museos, arte, literatura, deporte como entretenimiento
+- social: Comunidad, voluntariado, fiestas, ecología, medio ambiente, igualdad de género, inclusión, solidaridad, combatir soledad
+- economica: Empleo, emprendimiento, formación profesional, ferias comerciales, finanzas, coaching laboral
+- politica: Gobierno, parlamento, instituciones, agenda ministerial, actos institucionales, derechos cívicos
+- tecnologia: Informática, internet, programación, IA, robótica, ciberseguridad, brecha digital, ofimática, apps
+- sanitaria: Salud, nutrición, alimentación, ejercicio físico, primeros auxilios, salud mental, prevención, yoga, zumba, pilates
+
+Responde SOLO con el slug de la categoría. Sin explicación, sin comillas, sin puntuación."""
+
+
 class CategoryClassifier:
-    """Hybrid category classifier using embeddings + optional LLM fallback."""
+    """Category classifier using LLM as primary method, embeddings as fallback."""
 
     def __init__(
         self,
@@ -359,6 +404,95 @@ class CategoryClassifier:
         }
         self._embeddings_client: EmbeddingsClient | None = None
         self._category_embeddings: dict[str, list[float]] | None = None
+        self._llm_client: Any = None
+        self._llm_available: bool | None = None  # None = not checked yet
+
+    @property
+    def llm_client(self) -> Any:
+        """Lazy initialization of Groq LLM client."""
+        if self._llm_client is None:
+            try:
+                from src.config.settings import get_settings
+                settings = get_settings()
+                if not settings.groq_api_key:
+                    self._llm_available = False
+                    return None
+                from groq import Groq
+                self._llm_client = Groq(api_key=settings.groq_api_key)
+                self._llm_available = True
+                logger.info("category_llm_initialized", provider="groq")
+            except Exception as e:
+                logger.warning("category_llm_init_failed", error=str(e))
+                self._llm_available = False
+        return self._llm_client
+
+    def classify_llm(
+        self,
+        title: str,
+        source_context: str | None = None,
+    ) -> list[str]:
+        """Classify event using LLM (Groq).
+
+        Primary classification method. Uses the event title and optional
+        source context to determine the most appropriate category.
+
+        Only returns valid category slugs — never invents new categories.
+        Falls back to DEFAULT_CATEGORY if LLM returns an invalid response.
+
+        Args:
+            title: Event title
+            source_context: Optional description of the event source
+                (e.g. "CeMIT - centros de inclusión tecnológica de Galicia")
+
+        Returns:
+            List with a single category slug
+        """
+        client = self.llm_client
+        if client is None:
+            return []  # Signal caller to use fallback
+
+        user_msg = f"Título: {title}"
+        if source_context:
+            user_msg += f"\nFuente: {source_context}"
+
+        try:
+            from src.config.settings import get_settings
+            settings = get_settings()
+            model = settings.groq_model
+
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": _LLM_CLASSIFY_SYSTEM},
+                    {"role": "user", "content": user_msg},
+                ],
+                temperature=0,
+                max_tokens=10,
+            )
+            raw = response.choices[0].message.content.strip().lower()
+            # Clean common LLM artifacts
+            raw = raw.replace('"', '').replace("'", "").replace(".", "").strip()
+
+            if raw in self.allowed_categories:
+                logger.debug(
+                    "category_llm_ok",
+                    title=title[:60],
+                    category=raw,
+                )
+                return [raw]
+
+            # LLM returned invalid category — reject it
+            logger.warning(
+                "category_llm_invalid",
+                title=title[:60],
+                raw_response=raw,
+            )
+            return []  # Signal caller to use fallback
+
+        except Exception as e:
+            logger.warning("category_llm_error", error=str(e), title=title[:60])
+            self._llm_available = False  # Disable for rest of session
+            return []  # Signal caller to use fallback
 
     @property
     def embeddings_client(self) -> EmbeddingsClient:

@@ -125,7 +125,7 @@ AGENDADES_WEB_SCRAPPER/
 │   └── scheduler/                    # Scheduler (APScheduler)
 │       └── cron.py
 │
-├── tests/                            # Tests (273 passing)
+├── tests/                            # Tests (274 passing)
 │   ├── test_external_ids.py          # 71 tests: ID generation
 │   ├── test_date_formats.py          # 100 tests: date parsing
 │   ├── test_pipeline_unit.py         # 44 tests: pipeline logic
@@ -292,13 +292,33 @@ python -m src.cli insert --source segib --limit 5 --dry-run
 
 ```
 Fuente → Adapter.fetch_events() → Raw Events
-  → parse + filter (fecha >= hoy)
+  → parse + filter (fecha >= hoy, filtro infantil)
   → filter_existing (dedup por external_id)
-  → LLM Enricher (categorías, summary, is_free, keywords)
+  → LLM Enricher (summary, is_free, keywords)
+  → Category Classifier (LLM Groq → Embeddings fallback)
   → Image Resolver (Unsplash si no tiene imagen)
   → Geocoding + Embeddings
   → Supabase INSERT/UPDATE
 ```
+
+### Clasificación de Categorías
+
+El sistema usa **LLM (Groq)** como método primario de clasificación (~86% accuracy), con embeddings como fallback:
+
+| Prioridad | Método | Accuracy | Cuándo se usa |
+|-----------|--------|----------|---------------|
+| 1 | LLM (Groq llama-3.3-70b) | ~86% | Siempre (primero) |
+| 2 | Embeddings (BGE-M3) | ~57% | Si LLM no disponible |
+| 3 | Categoría del adapter | — | Si embeddings baja confianza |
+| 4 | "cultural" (default) | — | Último recurso |
+
+**6 categorías válidas** (nunca se inventan nuevas):
+- `cultural` — Arte, música, teatro, cine, exposiciones, deporte como entretenimiento
+- `social` — Comunidad, voluntariado, ecología, igualdad, combatir soledad
+- `economica` — Empleo, emprendimiento, formación profesional, finanzas
+- `politica` — Gobierno, instituciones, agenda ministerial, derechos cívicos
+- `tecnologia` — Informática, brecha digital, ofimática, ciberseguridad
+- `sanitaria` — Salud, nutrición, ejercicio físico, yoga, zumba, salud mental
 
 Cada fuente se procesa secuencialmente. Los jobs se ejecutan en background y se puede monitorizar en tiempo real via `GET /scrape/status/{id}/logs?since=N`.
 
@@ -329,7 +349,7 @@ Script: curl -s -X POST "https://api-scraper.si-erp.cloud/scrape/batch/full" -H 
 
 ```bash
 pytest tests/ -v
-# 273 tests passing (IDs, fechas, pipeline)
+# 274 tests passing (IDs, fechas, pipeline, clasificación LLM)
 ```
 
 ---

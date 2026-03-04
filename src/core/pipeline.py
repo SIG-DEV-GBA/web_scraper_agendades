@@ -20,6 +20,7 @@ Usage:
 """
 
 import gc
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
@@ -43,6 +44,30 @@ logger = get_logger(__name__)
 
 # Memory cleanup interval (every N batches)
 CLEANUP_EVERY_N_BATCHES = 5
+
+# Boilerplate patterns in event descriptions that add noise to classification.
+# These are source-specific footers/headers that don't describe the event content.
+_BOILERPLATE_PATTERNS = [
+    re.compile(r'Curso de formaci.n digital del programa CeMIT \(Xunta de Galicia\)\.', re.IGNORECASE),
+    re.compile(r'Duraci.n:\s*[\d.]+\s*horas\.', re.IGNORECASE),
+    re.compile(r'Plazas disponibles:\s*\d+\.', re.IGNORECASE),
+    re.compile(r'Formaci.n\s*(?:presencial|online|mixta)\s+en\s+[^.]*\.', re.IGNORECASE),
+    re.compile(r'Actividad gratuita de la red Puntos Vuela \(Andaluc.a\)\.', re.IGNORECASE),
+    re.compile(r'M.s informaci.n en\s*<a href="[^"]*">[^<]*</a>\.?', re.IGNORECASE),
+    re.compile(r'<a href="[^"]*">[^<]*</a>'),
+    re.compile(r'https?://\S+'),
+]
+
+
+def _strip_boilerplate(text: str) -> str:
+    """Remove known boilerplate phrases from event descriptions.
+
+    This improves category classification by reducing noise from
+    source-specific footers (e.g. CeMIT "formación digital", Puntos Vuela footer).
+    """
+    for pattern in _BOILERPLATE_PATTERNS:
+        text = pattern.sub('', text)
+    return text.strip()
 
 
 def _cleanup_memory() -> None:
@@ -660,14 +685,22 @@ class InsertionPipeline:
         )
 
     def _apply_enrichments(self, events: list[EventCreate], enrichments: dict[str, Any]) -> None:
-        """Apply LLM enrichments to events with hybrid classification.
+        """Apply LLM enrichments to events with LLM-based classification.
 
-        Uses embedding-based classification on the normalized_text from LLM.
-        Always runs the classifier, even when adapter set a category.
-        Adapter category is used as fallback when classifier confidence is low.
+        Classification priority:
+        1. LLM classifier (Groq) — highest accuracy (~86%)
+        2. Embedding classifier — fallback if LLM unavailable
+        3. Adapter category — fallback if embeddings have low confidence
+        4. "cultural" — final default
         """
-        # Get category classifier for embedding-based classification
         classifier = get_category_classifier()
+
+        # Build source context for LLM classifier
+        source_context = None
+        if self.source_config:
+            source_context = self.source_config.name
+            if self.source_config.ccaa:
+                source_context += f" ({self.source_config.ccaa})"
 
         for event in events:
             enrichment = enrichments.get(event.external_id)
@@ -677,58 +710,43 @@ class InsertionPipeline:
             # Save adapter's category as potential fallback
             adapter_category = event.category_slugs.copy() if event.category_slugs else None
 
-            # Always run embedding classifier when normalized_text is available
-            if enrichment.normalized_text:
+            # --- Category classification ---
+            # Try LLM first (best accuracy)
+            llm_categories = classifier.classify_llm(
+                title=event.title,
+                source_context=source_context,
+            )
+
+            if llm_categories:
+                # LLM returned a valid category
+                event.category_slugs = llm_categories
+                if adapter_category and llm_categories != adapter_category:
+                    logger.debug(
+                        "category_llm_override",
+                        event_id=event.external_id,
+                        adapter=adapter_category,
+                        llm=llm_categories,
+                    )
+            elif enrichment.normalized_text:
+                # LLM unavailable → fall back to embedding classifier
+                clean_text = _strip_boilerplate(enrichment.normalized_text)
                 categories, scores = classifier.classify(
-                    text=enrichment.normalized_text,
+                    text=clean_text,
                     title=event.title,
                 )
                 top_score = max(scores.values()) if scores else 0
 
                 if categories and top_score >= classifier.confidence_threshold:
-                    # Classifier is confident → use its result (may override adapter)
                     event.category_slugs = categories
-                    if adapter_category and categories != adapter_category:
-                        logger.debug(
-                            "category_override",
-                            event_id=event.external_id,
-                            adapter=adapter_category,
-                            classified=categories,
-                            score=top_score,
-                        )
-                    else:
-                        logger.debug(
-                            "hybrid_classification",
-                            event_id=event.external_id,
-                            categories=categories,
-                            top_score=top_score,
-                        )
                 elif adapter_category:
-                    # Low confidence → keep adapter's known category
                     event.category_slugs = adapter_category
-                    logger.debug(
-                        "category_adapter_fallback",
-                        event_id=event.external_id,
-                        adapter=adapter_category,
-                        best_classified=(categories[0] if categories else None),
-                        score=top_score,
-                    )
                 elif categories:
-                    # No adapter category, use classifier (marginal or default)
                     event.category_slugs = categories
-                    logger.debug(
-                        "hybrid_classification",
-                        event_id=event.external_id,
-                        categories=categories,
-                        top_score=top_score,
-                    )
                 elif enrichment.category_slugs:
                     event.category_slugs = enrichment.category_slugs
             elif adapter_category:
-                # No normalized_text, keep adapter category
                 event.category_slugs = adapter_category
             elif enrichment.category_slugs:
-                # No normalized_text, use LLM categories
                 event.category_slugs = enrichment.category_slugs
 
             # Final fallback: default to "cultural"
