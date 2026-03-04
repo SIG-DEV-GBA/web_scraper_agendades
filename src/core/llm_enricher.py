@@ -686,6 +686,14 @@ class LLMEnricher:
                         valid_slugs = ["cultural"]  # Default fallback
                     item["category_slugs"] = valid_slugs
 
+                    # Truncate text fields to avoid validation errors
+                    if item.get("summary") and len(item["summary"]) > 200:
+                        item["summary"] = item["summary"][:197] + "..."
+                    if item.get("normalized_text") and len(item["normalized_text"]) > 500:
+                        item["normalized_text"] = item["normalized_text"][:497] + "..."
+                    if item.get("normalized_address") and len(item["normalized_address"]) > 200:
+                        item["normalized_address"] = item["normalized_address"][:197] + "..."
+
                     enrichment = EventEnrichment(**item)
                     results[enrichment.event_id] = enrichment
                 except Exception as e:

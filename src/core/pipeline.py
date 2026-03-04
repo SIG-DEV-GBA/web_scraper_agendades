@@ -705,6 +705,13 @@ class InsertionPipeline:
         for event in events:
             enrichment = enrichments.get(event.external_id)
             if not enrichment:
+                # No enrichment (e.g. parsing failed) — still classify via LLM
+                if not event.category_slugs:
+                    llm_cats = classifier.classify_llm(
+                        title=event.title,
+                        source_context=source_context,
+                    )
+                    event.category_slugs = llm_cats or ["cultural"]
                 continue
 
             # Save adapter's category as potential fallback

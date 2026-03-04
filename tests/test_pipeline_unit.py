@@ -639,9 +639,11 @@ class TestApplyEnrichments:
         assert event.price_info == "10 EUR - descuento jubilados"
 
     @patch("src.core.pipeline.get_category_classifier")
-    def test_no_enrichment_for_event(self, mock_get_classifier):
-        """Events without a matching enrichment should be left unchanged."""
-        mock_get_classifier.return_value = MagicMock()
+    def test_no_enrichment_classifies_via_llm(self, mock_get_classifier):
+        """Events without enrichment should still get LLM classification."""
+        mock_classifier = MagicMock()
+        mock_classifier.classify_llm.return_value = ["cultural"]
+        mock_get_classifier.return_value = mock_classifier
 
         event = _make_event(external_id="e1", category_slugs=[])
         enrichments = {
@@ -651,7 +653,22 @@ class TestApplyEnrichments:
         self.pipeline._apply_enrichments([event], enrichments)
 
         assert event.summary is None
-        assert event.category_slugs == []
+        assert event.category_slugs == ["cultural"]
+        mock_classifier.classify_llm.assert_called_once()
+
+    @patch("src.core.pipeline.get_category_classifier")
+    def test_no_enrichment_keeps_adapter_category(self, mock_get_classifier):
+        """Events without enrichment but with adapter category keep it."""
+        mock_get_classifier.return_value = MagicMock()
+
+        event = _make_event(external_id="e1", category_slugs=["social"])
+        enrichments = {
+            "other_id": self._enrichment("other_id", summary="Not for e1"),
+        }
+
+        self.pipeline._apply_enrichments([event], enrichments)
+
+        assert event.category_slugs == ["social"]
 
     @patch("src.core.pipeline.get_category_classifier")
     def test_venue_based_free_inference(self, mock_get_classifier):
