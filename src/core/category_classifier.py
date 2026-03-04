@@ -367,7 +367,9 @@ IMPORTANTE: Considera el contexto del programa del que proviene el evento.
 - Una "Lectura compartida" en un programa contra la soledad es SOCIAL (combatir aislamiento), no cultural.
 - La agenda de un ministro es POLITICA aunque visite un museo.
 - Un taller de ChatGPT para emprendedores es ECONOMICA, no tecnologia.
-- Eventos deportivos como ejercicio o bienestar son SANITARIA, no inventar "deportiva".
+- Ejercicio físico regular (yoga, pilates, gimnasia) en centros de mayores es SANITARIA, no cultural.
+- Conciertos, espectáculos de danza y shows musicales son CULTURAL, aunque el nombre incluya baile o tango.
+- Ferias comerciales y de empleo son ECONOMICA, no cultural.
 
 Categorías (SOLO estas 6, no inventes nuevas):
 - cultural: Espectáculos, conciertos, teatro, cine, exposiciones, museos, arte, literatura, deporte como entretenimiento
