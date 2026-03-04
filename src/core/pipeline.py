@@ -663,10 +663,8 @@ class InsertionPipeline:
         """Apply LLM enrichments to events with hybrid classification.
 
         Uses embedding-based classification on the normalized_text from LLM.
-        This provides more consistent category assignment than LLM alone.
-
-        Note: If the adapter has already set category_slugs, it is respected
-        and not overridden by the classifier (e.g., VacacionesSeniors → social).
+        Always runs the classifier, even when adapter set a category.
+        Adapter category is used as fallback when classifier confidence is low.
         """
         # Get category classifier for embedding-based classification
         classifier = get_category_classifier()
@@ -676,39 +674,64 @@ class InsertionPipeline:
             if not enrichment:
                 continue
 
-            # Skip classification if adapter already set category_slugs
-            # (e.g., VacacionesSeniors sets "social" explicitly)
-            if not event.category_slugs:
-                # Hybrid classification: Use normalized_text for embedding-based categorization
-                if enrichment.normalized_text:
-                    # Classify using embeddings (more consistent than LLM categories)
-                    categories, scores = classifier.classify(
-                        text=enrichment.normalized_text,
-                        title=event.title,
-                    )
-                    if categories:
-                        event.category_slugs = categories
+            # Save adapter's category as potential fallback
+            adapter_category = event.category_slugs.copy() if event.category_slugs else None
+
+            # Always run embedding classifier when normalized_text is available
+            if enrichment.normalized_text:
+                categories, scores = classifier.classify(
+                    text=enrichment.normalized_text,
+                    title=event.title,
+                )
+                top_score = max(scores.values()) if scores else 0
+
+                if categories and top_score >= classifier.confidence_threshold:
+                    # Classifier is confident → use its result (may override adapter)
+                    event.category_slugs = categories
+                    if adapter_category and categories != adapter_category:
+                        logger.debug(
+                            "category_override",
+                            event_id=event.external_id,
+                            adapter=adapter_category,
+                            classified=categories,
+                            score=top_score,
+                        )
+                    else:
                         logger.debug(
                             "hybrid_classification",
                             event_id=event.external_id,
                             categories=categories,
-                            top_score=max(scores.values()) if scores else 0,
+                            top_score=top_score,
                         )
-                    elif enrichment.category_slugs:
-                        # Fallback to LLM categories if embedding fails
-                        event.category_slugs = enrichment.category_slugs
+                elif adapter_category:
+                    # Low confidence → keep adapter's known category
+                    event.category_slugs = adapter_category
+                    logger.debug(
+                        "category_adapter_fallback",
+                        event_id=event.external_id,
+                        adapter=adapter_category,
+                        best_classified=(categories[0] if categories else None),
+                        score=top_score,
+                    )
+                elif categories:
+                    # No adapter category, use classifier (marginal or default)
+                    event.category_slugs = categories
+                    logger.debug(
+                        "hybrid_classification",
+                        event_id=event.external_id,
+                        categories=categories,
+                        top_score=top_score,
+                    )
                 elif enrichment.category_slugs:
-                    # No normalized_text, use LLM categories directly
                     event.category_slugs = enrichment.category_slugs
-            else:
-                logger.debug(
-                    "category_preserved",
-                    event_id=event.external_id,
-                    categories=event.category_slugs,
-                    reason="adapter_fixed",
-                )
+            elif adapter_category:
+                # No normalized_text, keep adapter category
+                event.category_slugs = adapter_category
+            elif enrichment.category_slugs:
+                # No normalized_text, use LLM categories
+                event.category_slugs = enrichment.category_slugs
 
-            # Fallback: default to "cultural" if still no category
+            # Final fallback: default to "cultural"
             if not event.category_slugs:
                 event.category_slugs = ["cultural"]
 

@@ -442,6 +442,7 @@ class TestApplyEnrichments:
     def test_merges_category_via_classifier(self, mock_get_classifier):
         """When enrichment has normalized_text, classifier assigns categories."""
         mock_classifier = MagicMock()
+        mock_classifier.confidence_threshold = 0.48
         mock_classifier.classify.return_value = (["cultural"], {"cultural": 0.95})
         mock_get_classifier.return_value = mock_classifier
 
@@ -463,6 +464,7 @@ class TestApplyEnrichments:
     def test_merges_category_llm_fallback(self, mock_get_classifier):
         """When classifier returns no categories, fall back to LLM categories."""
         mock_classifier = MagicMock()
+        mock_classifier.confidence_threshold = 0.48
         mock_classifier.classify.return_value = ([], {})
         mock_get_classifier.return_value = mock_classifier
 
@@ -480,30 +482,55 @@ class TestApplyEnrichments:
         assert event.category_slugs == ["social"]
 
     @patch("src.core.pipeline.get_category_classifier")
-    def test_does_not_overwrite_existing_categories(self, mock_get_classifier):
-        """If the adapter already set category_slugs, they should be preserved."""
+    def test_adapter_category_as_fallback_when_low_confidence(self, mock_get_classifier):
+        """When classifier has low confidence, adapter category is used as fallback."""
         mock_classifier = MagicMock()
+        mock_classifier.confidence_threshold = 0.48
+        mock_classifier.classify.return_value = (["cultural"], {"cultural": 0.35})
         mock_get_classifier.return_value = mock_classifier
 
         event = _make_event(external_id="e1", category_slugs=["social"])
         enrichments = {
             "e1": self._enrichment(
                 "e1",
-                normalized_text="Algo",
+                normalized_text="Algo ambiguo",
                 category_slugs=["cultural"],
             ),
         }
 
         self.pipeline._apply_enrichments([event], enrichments)
 
-        # Adapter categories preserved; classifier never called
+        # Adapter category preserved because classifier score < 0.48
         assert event.category_slugs == ["social"]
-        mock_classifier.classify.assert_not_called()
+        mock_classifier.classify.assert_called_once()
+
+    @patch("src.core.pipeline.get_category_classifier")
+    def test_classifier_overrides_adapter_when_confident(self, mock_get_classifier):
+        """When classifier is confident, it overrides adapter category."""
+        mock_classifier = MagicMock()
+        mock_classifier.confidence_threshold = 0.48
+        mock_classifier.classify.return_value = (["sanitaria"], {"sanitaria": 0.85})
+        mock_get_classifier.return_value = mock_classifier
+
+        event = _make_event(external_id="e1", category_slugs=["tecnologia"])
+        enrichments = {
+            "e1": self._enrichment(
+                "e1",
+                normalized_text="Taller de nutricion y vida saludable",
+                category_slugs=["sanitaria"],
+            ),
+        }
+
+        self.pipeline._apply_enrichments([event], enrichments)
+
+        # Classifier overrides because score 0.85 >= 0.48
+        assert event.category_slugs == ["sanitaria"]
 
     @patch("src.core.pipeline.get_category_classifier")
     def test_merges_summary(self, mock_get_classifier):
         """Summary from enrichment should be applied to the event."""
         mock_get_classifier.return_value = MagicMock(
+            confidence_threshold=0.48,
             classify=MagicMock(return_value=([], {})),
         )
 
@@ -520,6 +547,7 @@ class TestApplyEnrichments:
     def test_merges_is_free(self, mock_get_classifier):
         """is_free from enrichment should be applied."""
         mock_get_classifier.return_value = MagicMock(
+            confidence_threshold=0.48,
             classify=MagicMock(return_value=([], {})),
         )
 
@@ -538,6 +566,7 @@ class TestApplyEnrichments:
     def test_merges_price(self, mock_get_classifier):
         """Numeric price from enrichment should be set and is_free forced False."""
         mock_get_classifier.return_value = MagicMock(
+            confidence_threshold=0.48,
             classify=MagicMock(return_value=([], {})),
         )
 
@@ -555,6 +584,7 @@ class TestApplyEnrichments:
     def test_merges_normalized_address(self, mock_get_classifier):
         """normalized_address from enrichment should be set as event.address."""
         mock_get_classifier.return_value = MagicMock(
+            confidence_threshold=0.48,
             classify=MagicMock(return_value=([], {})),
         )
 
@@ -571,6 +601,7 @@ class TestApplyEnrichments:
     def test_price_details_gratis_sets_free(self, mock_get_classifier):
         """price_details containing 'gratis' should set is_free=True and clear price_info."""
         mock_get_classifier.return_value = MagicMock(
+            confidence_threshold=0.48,
             classify=MagicMock(return_value=([], {})),
         )
 
@@ -588,6 +619,7 @@ class TestApplyEnrichments:
     def test_price_details_non_free(self, mock_get_classifier):
         """price_details with actual info should populate price_info."""
         mock_get_classifier.return_value = MagicMock(
+            confidence_threshold=0.48,
             classify=MagicMock(return_value=([], {})),
         )
 
@@ -619,6 +651,7 @@ class TestApplyEnrichments:
     def test_venue_based_free_inference(self, mock_get_classifier):
         """Venue name containing 'biblioteca' should infer is_free=True."""
         mock_get_classifier.return_value = MagicMock(
+            confidence_threshold=0.48,
             classify=MagicMock(return_value=([], {})),
         )
 
@@ -636,6 +669,7 @@ class TestApplyEnrichments:
     def test_category_direct_llm_when_no_normalized_text(self, mock_get_classifier):
         """When normalized_text is None, LLM category_slugs should be used directly."""
         mock_classifier = MagicMock()
+        mock_classifier.confidence_threshold = 0.48
         mock_get_classifier.return_value = mock_classifier
 
         event = _make_event(external_id="e1")
