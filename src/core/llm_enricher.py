@@ -58,7 +58,7 @@ class EventEnrichment(BaseModel):
         default_factory=list,
         description="1-3 categories from: cultural, social, economica, politica, sanitaria, tecnologia"
     )
-    summary: str | None = Field(default=None, max_length=200, description="Resumen conciso del evento")
+    summary: str | None = Field(default=None, max_length=300, description="Resumen conciso del evento (2-3 frases)")
     description: str | None = Field(default=None, max_length=1000, description="Descripción detallada del evento (para fuentes Bronze sin descripción)")
     image_keywords: list[str] = Field(default_factory=list, description="3 keywords en inglés para buscar imagen")
     age_range: str | None = Field(default=None, description="Rango de edad: infantil, familiar, adultos, mayores, todos")
@@ -483,7 +483,7 @@ Responde SOLO con JSON válido (array de objetos):
     "normalized_text": "Texto limpio para embedding (100-200 chars)",
     "normalized_address": "Dirección normalizada para geocoding o null",
     "category_slugs": ["cultural"],
-    "summary": "Resumen corto (max 150 chars) o null",
+    "summary": "Resumen útil de 2-3 frases (max 280 chars) o null",
     "description": "Descripción más larga si no hay original (max 500 chars) o null",
     "image_keywords": ["keyword1", "keyword2", "keyword3"],
     "age_range": "infantil|familiar|adultos|mayores|todos",
@@ -687,8 +687,8 @@ class LLMEnricher:
                     item["category_slugs"] = valid_slugs
 
                     # Truncate text fields to avoid validation errors
-                    if item.get("summary") and len(item["summary"]) > 200:
-                        item["summary"] = item["summary"][:197] + "..."
+                    if item.get("summary") and len(item["summary"]) > 300:
+                        item["summary"] = item["summary"][:297] + "..."
                     if item.get("normalized_text") and len(item["normalized_text"]) > 500:
                         item["normalized_text"] = item["normalized_text"][:497] + "..."
                     if item.get("normalized_address") and len(item["normalized_address"]) > 200:
