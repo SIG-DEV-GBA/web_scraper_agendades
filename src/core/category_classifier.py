@@ -360,19 +360,21 @@ def is_children_only(title: str, description: str = "", use_embeddings: bool = T
 # ============================================================
 
 _LLM_CLASSIFY_SYSTEM = """Eres un clasificador de eventos para Agendades, una agenda de actividades para personas mayores en España.
-Clasifica cada evento en UNA sola categoría según su PROPÓSITO PRINCIPAL para el público mayor.
+Clasifica cada evento en UNA categoría principal. SOLO usa DOS categorías para certificaciones profesionales con tema específico.
 
 IMPORTANTE: El CONTENIDO del evento tiene PRIORIDAD sobre la fuente.
 - Enfermedades o condiciones médicas (Alzheimer, diabetes, demencia, cáncer) = SANITARIA, aunque sea en un centro tecnológico.
 - Habilidades laborales (caja, almacén, atención al cliente, hostelería, manipulador alimentos) = ECONOMICA, aunque sea en un centro tecnológico.
+- Cursos de certificación profesional con tema de salud (socorrista, cuidador) = economica,sanitaria (dos categorías)
 - Un "Baile Zumba" en un programa de bienestar para mayores es SANITARIA (ejercicio), no cultural.
 - Una "Lectura compartida" en un programa contra la soledad es SOCIAL (combatir aislamiento), no cultural.
-- La agenda de un ministro es POLITICA aunque visite un museo.
+- La agenda de un ministro es POLITICA aunque visite un museo o se conecte por Zoom.
 - Un taller de ChatGPT para emprendedores es ECONOMICA, no tecnologia.
 - Ejercicio físico regular (yoga, pilates, gimnasia) en centros de mayores es SANITARIA, no cultural.
 - Conciertos, espectáculos de danza y shows musicales son CULTURAL, aunque el nombre incluya baile o tango.
 - Ferias comerciales y de empleo son ECONOMICA, no cultural.
-- SOLO clasifica como TECNOLOGIA si el tema es específicamente informática, programación, apps, internet o brecha digital.
+- SOLO clasifica como TECNOLOGIA si el TEMA es específicamente informática, programación, apps, internet o brecha digital.
+- Mencionar Zoom, telemático, online o videoconferencia NO convierte un evento en TECNOLOGIA (es solo el medio, no el tema).
 
 Categorías (SOLO estas 6, no inventes nuevas):
 - cultural: Espectáculos, conciertos, teatro, cine, exposiciones, museos, arte, literatura, deporte como entretenimiento
@@ -382,7 +384,7 @@ Categorías (SOLO estas 6, no inventes nuevas):
 - tecnologia: Informática, internet, programación, IA, robótica, ciberseguridad, brecha digital, ofimática, apps
 - sanitaria: Salud, nutrición, alimentación, ejercicio físico, primeros auxilios, salud mental, prevención, yoga, zumba, pilates
 
-Responde SOLO con el slug de la categoría. Sin explicación, sin comillas, sin puntuación."""
+Responde SOLO con slug(s). Para 2 categorías usa coma: "economica,sanitaria". Sin explicación."""
 
 
 class CategoryClassifier:
@@ -472,19 +474,25 @@ class CategoryClassifier:
                     {"role": "user", "content": user_msg},
                 ],
                 temperature=0,
-                max_tokens=10,
+                max_tokens=30,
             )
             raw = response.choices[0].message.content.strip().lower()
             # Clean common LLM artifacts
             raw = raw.replace('"', '').replace("'", "").replace(".", "").strip()
 
-            if raw in self.allowed_categories:
+            # Parse single or multiple categories (comma-separated)
+            parts = [p.strip() for p in raw.split(",") if p.strip()]
+            valid_cats = [p for p in parts if p in self.allowed_categories]
+
+            if valid_cats:
+                # Limit to max 2 categories
+                valid_cats = valid_cats[:2]
                 logger.debug(
                     "category_llm_ok",
                     title=title[:60],
-                    category=raw,
+                    categories=valid_cats,
                 )
-                return [raw]
+                return valid_cats
 
             # LLM returned invalid category — reject it
             logger.warning(
