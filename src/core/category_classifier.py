@@ -362,7 +362,9 @@ def is_children_only(title: str, description: str = "", use_embeddings: bool = T
 _LLM_CLASSIFY_SYSTEM = """Eres un clasificador de eventos para Agendades, una agenda de actividades para personas mayores en España.
 Clasifica cada evento en UNA sola categoría según su PROPÓSITO PRINCIPAL para el público mayor.
 
-IMPORTANTE: Considera el contexto del programa del que proviene el evento.
+IMPORTANTE: El CONTENIDO del evento tiene PRIORIDAD sobre la fuente.
+- Enfermedades o condiciones médicas (Alzheimer, diabetes, demencia, cáncer) = SANITARIA, aunque sea en un centro tecnológico.
+- Habilidades laborales (caja, almacén, atención al cliente, hostelería, manipulador alimentos) = ECONOMICA, aunque sea en un centro tecnológico.
 - Un "Baile Zumba" en un programa de bienestar para mayores es SANITARIA (ejercicio), no cultural.
 - Una "Lectura compartida" en un programa contra la soledad es SOCIAL (combatir aislamiento), no cultural.
 - La agenda de un ministro es POLITICA aunque visite un museo.
@@ -370,6 +372,7 @@ IMPORTANTE: Considera el contexto del programa del que proviene el evento.
 - Ejercicio físico regular (yoga, pilates, gimnasia) en centros de mayores es SANITARIA, no cultural.
 - Conciertos, espectáculos de danza y shows musicales son CULTURAL, aunque el nombre incluya baile o tango.
 - Ferias comerciales y de empleo son ECONOMICA, no cultural.
+- SOLO clasifica como TECNOLOGIA si el tema es específicamente informática, programación, apps, internet o brecha digital.
 
 Categorías (SOLO estas 6, no inventes nuevas):
 - cultural: Espectáculos, conciertos, teatro, cine, exposiciones, museos, arte, literatura, deporte como entretenimiento
