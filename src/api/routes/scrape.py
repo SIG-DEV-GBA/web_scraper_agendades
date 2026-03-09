@@ -667,7 +667,7 @@ async def batch_viralagenda(
 
 class BatchFullRequest(BaseModel):
     """Request for full scrape of all sources."""
-    limit: int = Field(100, ge=1, le=200, description="Max events per source")
+    limit: int = Field(100, ge=1, le=500, description="Max events per source")
     dry_run: bool = Field(False, description="Don't save to database")
     tier: str | None = Field(None, pattern=r"^(gold|silver|bronze)$", description="Limit to specific tier")
 
