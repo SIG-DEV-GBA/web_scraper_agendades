@@ -1784,6 +1784,7 @@ _DEDICATED_ADAPTER_SLUGS = {
     "nferias",
     "barcelona_activa",
     "viveceuta",
+    "visitpalma_agenda",
     "tourdelempleo",
 }
 
