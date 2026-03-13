@@ -335,6 +335,18 @@ class BronzeScraperAdapter(BaseAdapter):
             "navarra_cultura",
             "asturias_turismo",
             "canarias_lagenda",  # Firecrawl returns 500
+            # New sources (Firecrawl /scrape 404, /v1/scrape returns markdown)
+            "viveceuta",
+            "melilla_cultura",
+            "visitpalma_agenda",
+            "palmacultura",
+            "santander_creativa",
+            "turismo_santander",
+            "eventos_murcia",
+            "turismo_murcia",
+            "visitvalencia_agenda",
+            "clm_turismo",
+            "riojaforum",
         }
         if self.bronze_config.slug in direct_http_sources:
             use_firecrawl = False
@@ -1771,6 +1783,7 @@ _DEDICATED_ADAPTER_SLUGS = {
     "horizonte_europa",
     "nferias",
     "barcelona_activa",
+    "viveceuta",
     "tourdelempleo",
 }
 
