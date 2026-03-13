@@ -206,10 +206,13 @@ class ViveCeutaAdapter(BaseAdapter):
                     time_parts = parts[1].split(":")
                     start_time = dt_time(int(time_parts[0]), int(time_parts[1]))
 
-            # Parse end time
+            # Parse end date/time
+            end_date = None
             end_time = None
             if end_str:
                 parts = end_str.split(" ")
+                ed_parts = parts[0].split("-")
+                end_date = date(int(ed_parts[0]), int(ed_parts[1]), int(ed_parts[2]))
                 if len(parts) > 1 and not event.get("all_day"):
                     time_parts = parts[1].split(":")
                     end_time = dt_time(int(time_parts[0]), int(time_parts[1]))
@@ -263,6 +266,7 @@ class ViveCeutaAdapter(BaseAdapter):
             return {
                 "title": title,
                 "start_date": start_date,
+                "end_date": end_date,
                 "start_time": start_time,
                 "end_time": end_time,
                 "description": description,
@@ -301,9 +305,24 @@ class ViveCeutaAdapter(BaseAdapter):
                     type="institucion",
                 )
 
+            # Build alternative_dates for multi-day events (exhibitions, etc.)
+            end_date = raw_data.get("end_date")
+            alternative_dates = None
+            if end_date and end_date != start_date:
+                all_dates = []
+                d = start_date
+                while d <= end_date:
+                    all_dates.append(d)
+                    d += timedelta(days=1)
+                alternative_dates = {
+                    "dates": [d.isoformat() for d in all_dates],
+                    "prices": {},
+                }
+
             return EventCreate(
                 title=title,
                 start_date=start_date,
+                end_date=end_date,
                 start_time=raw_data.get("start_time"),
                 end_time=raw_data.get("end_time"),
                 description=raw_data.get("description", ""),
@@ -322,6 +341,7 @@ class ViveCeutaAdapter(BaseAdapter):
                 price=raw_data.get("price"),
                 price_info=raw_data.get("price_info"),
                 is_free=raw_data.get("is_free", False),
+                alternative_dates=alternative_dates,
                 requires_registration=False,
                 is_published=True,
             )
