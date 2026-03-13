@@ -11,7 +11,7 @@ Resolves missing venue addresses via Tavily web search.
 
 import os
 import re
-from datetime import date, time as dt_time
+from datetime import date, time as dt_time, timedelta
 from typing import Any
 
 import requests
@@ -126,7 +126,9 @@ class ViveCeutaAdapter(BaseAdapter):
 
         try:
             while len(events) < effective_limit:
-                url = f"{API_URL}?per_page=50&page={page}&start_date={date.today().isoformat()}"
+                # Fetch from 60 days ago to catch multi-day events still active today
+                lookback = (date.today() - timedelta(days=60)).isoformat()
+                url = f"{API_URL}?per_page=50&page={page}&start_date={lookback}"
                 self.logger.info("fetching_viveceuta", url=url, page=page)
 
                 response = await self.fetch_url(url)
@@ -139,6 +141,15 @@ class ViveCeutaAdapter(BaseAdapter):
                 for event in api_events:
                     if len(events) >= effective_limit:
                         break
+                    # Skip events that already ended
+                    end_str = event.get("end_date", "")
+                    if end_str:
+                        try:
+                            end_d = date(*map(int, end_str.split(" ")[0].split("-")))
+                            if end_d < date.today():
+                                continue
+                        except (ValueError, IndexError):
+                            pass
                     parsed = self._parse_api_event(event)
                     if parsed:
                         # Resolve address via Tavily if venue has no address
