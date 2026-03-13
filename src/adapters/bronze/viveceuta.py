@@ -163,11 +163,39 @@ class ViveCeutaAdapter(BaseAdapter):
 
             self.logger.info("viveceuta_events_found", count=len(events))
 
+            # Fetch ticket links from detail pages
+            if fetch_details and events:
+                await self._fetch_ticket_links(events)
+
         except Exception as e:
             self.logger.error("fetch_error", error=str(e))
             raise
 
         return events
+
+    async def _fetch_ticket_links(self, events: list[dict[str, Any]]) -> None:
+        """Fetch detail pages to extract ticket purchase links.
+
+        Each event detail page has a main section (data-id=3fd2213) with the
+        event-specific "Comprar entradas" button, plus a carousel section
+        (data-id=4142aab) with other events' buttons. We only grab the main one.
+        """
+        for i, event in enumerate(events):
+            detail_url = event.get("external_url")
+            if not detail_url:
+                continue
+            try:
+                response = await self.fetch_url(detail_url)
+                soup = BeautifulSoup(response.text, "html.parser")
+                # Main event section ticket link (not the carousel)
+                main_section = soup.select_one('[data-id="3fd2213"]')
+                if main_section:
+                    btn = main_section.select_one(".buy-tickets a[href]")
+                    if btn:
+                        event["ticket_url"] = btn["href"]
+                        self.logger.debug("ticket_link_found", title=event.get("title", "")[:30], url=btn["href"][:60])
+            except Exception as e:
+                self.logger.debug("ticket_fetch_error", idx=i, error=str(e)[:50])
 
     def _resolve_address(self, event_data: dict[str, Any]) -> None:
         """Resolve missing address via Tavily web search."""
@@ -279,6 +307,7 @@ class ViveCeutaAdapter(BaseAdapter):
                 "is_free": is_free,
                 "price": price if price and price > 0 else None,
                 "price_info": cost if cost else None,
+                "website": event.get("website", ""),
                 "categories": cat_names,
                 "organizer_name": organizer_name,
             }
@@ -338,11 +367,12 @@ class ViveCeutaAdapter(BaseAdapter):
                 source_id=self.source_id,
                 source_image_url=raw_data.get("image_url"),
                 organizer=organizer,
+                registration_url=raw_data.get("ticket_url") or raw_data.get("website") or None,
                 price=raw_data.get("price"),
                 price_info=raw_data.get("price_info"),
                 is_free=raw_data.get("is_free", False),
                 alternative_dates=alternative_dates,
-                requires_registration=False,
+                requires_registration=bool(raw_data.get("ticket_url")),
                 is_published=True,
             )
 
