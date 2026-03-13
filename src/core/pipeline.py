@@ -510,13 +510,13 @@ class InsertionPipeline:
         if tier == SourceTier.GOLD:
             # For non-paginated Gold sources (like Madrid), the adapter randomizes events
             # before applying limit, so each run gets different events
-            return await self.adapter.fetch_events(max_pages=10, limit=self.config.limit)
+            return await self.adapter.fetch_events(max_pages=10, limit=None)
 
         elif tier == SourceTier.BRONZE:
             return await self.adapter.fetch_events(
                 enrich=False,
                 fetch_details=self.config.fetch_details,
-                limit=self.config.limit,  # Apply limit BEFORE fetching details
+                limit=None,  # Fetch all available; limit applied after dedup
             )
 
         elif tier == SourceTier.SILVER:
