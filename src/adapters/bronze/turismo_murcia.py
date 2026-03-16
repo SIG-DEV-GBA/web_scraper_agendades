@@ -60,7 +60,8 @@ def _parse_date_range(text: str) -> tuple[date | None, date | None]:
         except (KeyError, ValueError):
             pass
 
-    # Pattern: DD MON - DD MON (no year, infer current/next)
+    # Pattern: DD MON - DD MON (no year — infer from active agenda context)
+    # Events are on the ACTIVE agenda so today falls within or near the range.
     m = re.match(
         r"(\d{1,2})\s+(\w{3})\s*-\s*(\d{1,2})\s+(\w{3})",
         text, re.IGNORECASE,
@@ -69,8 +70,14 @@ def _parse_date_range(text: str) -> tuple[date | None, date | None]:
         try:
             sm = _SHORT_MONTHS[m.group(2).lower()]
             em = _SHORT_MONTHS[m.group(4).lower()]
-            sy = today.year if sm >= today.month - 1 else today.year + 1
-            ey = sy if em >= sm else sy + 1
+            if sm > em:
+                # Year-wrapping range (e.g. SEP-ABR): started last year, ends this year
+                sy = today.year - 1
+                ey = today.year
+            else:
+                # Same-year range (e.g. ENE-DIC, MAR-JUN): use current year
+                sy = today.year
+                ey = today.year
             sd = date(sy, sm, int(m.group(1)))
             ed = date(ey, em, int(m.group(3)))
             return sd, ed
@@ -309,12 +316,14 @@ class TurismoMurciaAdapter(BaseAdapter):
         """Parse raw event data into EventCreate model."""
         try:
             title = raw_data.get("detail_title") or raw_data.get("title")
-            start_date = raw_data.get("detail_start_date") or raw_data.get("start_date")
+            # Prefer listing dates (seasonal window) over detail dates
+            # (full operating period which can span years, e.g. 2023-2030).
+            start_date = raw_data.get("start_date") or raw_data.get("detail_start_date")
 
             if not title or not start_date:
                 return None
 
-            end_date = raw_data.get("detail_end_date") or raw_data.get("end_date")
+            end_date = raw_data.get("end_date") or raw_data.get("detail_end_date")
             city = raw_data.get("detail_city") or raw_data.get("city", "Murcia")
 
             # Build alternative_dates for multi-day events
