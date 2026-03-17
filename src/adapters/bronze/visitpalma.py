@@ -2,7 +2,7 @@
 
 Source: https://visitpalma.com/es/agenda/
 Tier: Bronze (but uses WordPress REST API - The Events Calendar)
-CCAA: Illes Balears
+CCAA: Islas Baleares
 Category: cultural (primarily)
 
 Uses The Events Calendar REST API for structured JSON data.
@@ -33,9 +33,9 @@ class VisitPalmaAdapter(BaseAdapter):
     source_id = "visitpalma_agenda"
     source_name = "Visit Palma - Agenda de Eventos"
     source_url = "https://visitpalma.com/es/agenda/"
-    ccaa = "Illes Balears"
+    ccaa = "Islas Baleares"
     ccaa_code = "IB"
-    province = "Illes Balears"
+    province = "Islas Baleares"
     adapter_type = AdapterType.STATIC
     tier = "bronze"
 
@@ -247,8 +247,8 @@ class VisitPalmaAdapter(BaseAdapter):
                 venue_name=raw_data.get("venue_name"),
                 address=raw_data.get("address"),
                 city=raw_data.get("city", "Palma"),
-                province="Illes Balears",
-                comunidad_autonoma="Illes Balears",
+                province="Islas Baleares",
+                comunidad_autonoma="Islas Baleares",
                 country="España",
                 location_type=LocationType.PHYSICAL,
                 external_url=raw_data.get("external_url"),

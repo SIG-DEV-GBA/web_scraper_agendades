@@ -283,7 +283,7 @@ def _register_viralagenda_sources():
         slug="viralagenda_valencia",
         name="Viral Agenda - Valencia",
         province="Valencia",
-        ccaa="Comunitat Valenciana",
+        ccaa="Comunidad Valenciana",
         ccaa_code="VC",
         url_path="comunitat-valenciana/valencia",
     )

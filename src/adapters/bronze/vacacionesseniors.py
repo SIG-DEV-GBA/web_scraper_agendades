@@ -535,7 +535,7 @@ class VacacionesSeniorsAdapter(BaseAdapter):
         "rioja": ("Logroño", "La Rioja", "La Rioja"),
         "pais vasco": ("Bilbao", "Bizkaia", "País Vasco"),
         "euskadi": ("Bilbao", "Bizkaia", "País Vasco"),
-        "valencia": ("Valencia", "Valencia", "Comunitat Valenciana"),
+        "valencia": ("Valencia", "Valencia", "Comunidad Valenciana"),
         "murcia": ("Murcia", "Murcia", "Región de Murcia"),
         # Provincias Andalucía
         "almeria": ("Almería", "Almería", "Andalucía"),

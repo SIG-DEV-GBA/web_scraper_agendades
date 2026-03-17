@@ -2,7 +2,7 @@
 
 Source: https://www.visitvalencia.com/agenda-valencia
 Tier: Bronze (HTML scraping)
-CCAA: Comunitat Valenciana
+CCAA: Comunidad Valenciana
 
 Pagination by month: ?date=YYYY-MM. Fetches current month + next 2 months.
 Listing provides title, date range (DD/MM/YYYY), link, and teaser image.
@@ -62,7 +62,7 @@ class VisitValenciaAdapter(BaseAdapter):
     source_id = "visitvalencia_agenda"
     source_name = "VisitValencia - Agenda"
     source_url = LISTING_URL
-    ccaa = "Comunitat Valenciana"
+    ccaa = "Comunidad Valenciana"
     ccaa_code = "VC"
     province = "Valencia"
     adapter_type = AdapterType.STATIC
@@ -244,7 +244,7 @@ class VisitValenciaAdapter(BaseAdapter):
                 description=raw_data.get("description", ""),
                 city="Valencia",
                 province="Valencia",
-                comunidad_autonoma="Comunitat Valenciana",
+                comunidad_autonoma="Comunidad Valenciana",
                 country="España",
                 location_type=LocationType.PHYSICAL,
                 external_url=raw_data.get("detail_url"),
