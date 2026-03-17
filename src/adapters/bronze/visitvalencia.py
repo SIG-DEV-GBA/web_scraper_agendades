@@ -192,7 +192,7 @@ class VisitValenciaAdapter(BaseAdapter):
                         if len(text) > 30:
                             paragraphs.append(text)
                     if paragraphs:
-                        event["description"] = "\n\n".join(paragraphs)[:2000]
+                        event["description"] = "\n\n".join(paragraphs)[:5000]
 
                 # Fallback to meta description
                 if not event.get("description"):
