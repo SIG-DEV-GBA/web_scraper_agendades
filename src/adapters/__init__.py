@@ -64,6 +64,7 @@ def _ensure_adapters_loaded() -> None:
     from src.adapters.bronze import viveceuta  # noqa: F401
     from src.adapters.bronze import visitpalma  # noqa: F401
     from src.adapters.bronze import turismo_murcia  # noqa: F401
+    from src.adapters.bronze import visitvalencia  # noqa: F401
     from src.adapters.bronze import oviedo_digital  # noqa: F401
     from src.adapters.bronze import cemit_galicia  # noqa: F401
     from src.adapters.bronze import puntos_vuela  # noqa: F401

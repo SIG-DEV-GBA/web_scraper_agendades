@@ -1692,30 +1692,6 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         detail_id_extractor="url_suffix",
         detail_description_selector=".ectbe-evt-description, .tribe-events-content, .entry-content",
     ),
-    BronzeSourceConfig(
-        slug="palmacultura",
-        name="Palma Cultura - Ajuntament de Palma",
-        listing_url="https://www.palmacultura.es/index.php?Idi=2",
-        ccaa="Illes Balears",
-        ccaa_code="IB",
-        province="Illes Balears",
-        city="Palma",
-        tier=SourceTier.BRONZE,
-        uses_firecrawl=False,
-        base_url="https://www.palmacultura.es",
-        # CMS PHP custom — 12 eventos en div.box con h3/h4 links
-        # Links relativos: ficha.php?Cod_not=14095
-        event_card_selector="div.box",
-        title_selector="h3 a, h4 a",
-        link_selector="h3 a, h4 a",
-        image_selector="img",
-        date_selector=".fecha, time",
-        requires_detail_fetch=True,
-        max_pages=1,
-        detail_url_pattern="https://www.palmacultura.es/{id}",
-        detail_id_extractor="url_suffix",
-        detail_description_selector=".descripcion, .description, .content, article .text",
-    ),
     # ---- CANTABRIA (2 sources) ----
     BronzeSourceConfig(
         slug="santander_creativa",
@@ -1766,31 +1742,7 @@ BRONZE_SOURCES: list[BronzeSourceConfig] = [
         detail_id_extractor="url_suffix",
         detail_description_selector=".field-name-body, .node-content, article .content",
     ),
-    # ---- REGIÓN DE MURCIA (2 sources) ----
-    BronzeSourceConfig(
-        slug="eventos_murcia",
-        name="Eventos Ayuntamiento de Murcia",
-        listing_url="https://eventos.murcia.es/",
-        ccaa="Región de Murcia",
-        ccaa_code="MC",
-        province="Murcia",
-        city="Murcia",
-        tier=SourceTier.BRONZE,
-        uses_firecrawl=False,
-        base_url="https://eventos.murcia.es",
-        # Plataforma Symposium — 8 eventos en .o-card
-        # Titles in .o-card__detail h1, links to /event_detail/ID/detail/slug.html
-        event_card_selector=".o-card",
-        title_selector=".o-card__detail h1",
-        link_selector=".o-card__detail a",
-        image_selector="img",  # Background images in style attr (fallback to og:image)
-        date_selector=".o-card__day, .o-card__month",
-        requires_detail_fetch=True,
-        max_pages=1,
-        detail_url_pattern="https://eventos.murcia.es{id}",
-        detail_id_extractor="url_suffix",
-        detail_description_selector=".o-event__description, .event-description, .content, article .text",
-    ),
+    # ---- REGIÓN DE MURCIA ----
     BronzeSourceConfig(
         slug="turismo_murcia",
         name="Turismo Región de Murcia - Agenda",

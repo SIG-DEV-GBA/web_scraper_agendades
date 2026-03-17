@@ -339,10 +339,8 @@ class BronzeScraperAdapter(BaseAdapter):
             "viveceuta",
             "melilla_cultura",
             "visitpalma_agenda",
-            "palmacultura",
             "santander_creativa",
             "turismo_santander",
-            "eventos_murcia",
             "turismo_murcia",
             "visitvalencia_agenda",
             "clm_turismo",
@@ -1786,6 +1784,7 @@ _DEDICATED_ADAPTER_SLUGS = {
     "viveceuta",
     "visitpalma_agenda",
     "turismo_murcia",
+    "visitvalencia_agenda",
     "tourdelempleo",
 }
 
