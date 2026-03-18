@@ -84,6 +84,18 @@ app.include_router(scheduler.router, prefix="/scheduler", tags=["Scheduler"])
 app.include_router(dev.router, prefix="/dev", tags=["Development"])
 
 
+@app.get("/firma", include_in_schema=False)
+async def firma():
+    return {
+        "developer": "Georgi Borisov Aleksandrov",
+        "location": "Zamora, España",
+        "stack": "Fullstack (Next.js, React, Node.js, Python, FastAPI)",
+        "github": "https://github.com/georgif0x",
+        "email": "ge0rgid3v@gmail.com",
+        "sha256": "5e954df5e3c94ac6cf90ebffa303b619c9a5e0513fdbf5aacc2d8fe8b509d8d5",
+    }
+
+
 @app.get("/", tags=["Health"])
 async def root():
     """Health check endpoint."""
