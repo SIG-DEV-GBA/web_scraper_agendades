@@ -1,0 +1,19 @@
+FUENTES NUEVAS - ESTADO ACTUAL
+===============================
+
+✅ FUNCIONAN BIEN (no tocar):
+1. santander_creativa    → 35 eventos  → https://www.santandercreativa.com/agenda/hoy
+2. visitvalencia_agenda  → 134 eventos → https://www.visitvalencia.com/agenda-valencia
+3. clm_turismo           → 12 eventos  → https://www.turismocastillalamancha.es/es/agenda
+4. eventos_murcia        → 8 eventos   → https://eventos.murcia.es/
+
+⚠️ POCOS RESULTADOS (1 evento, deberían ser más):
+5. viveceuta             → 1 evento    → https://viveceuta.es/
+6. visitpalma_agenda     → 1 evento    → https://visitpalma.com/es/agenda/
+7. palmacultura          → 1 evento    → https://www.palmacultura.es/index.php?Idi=2
+8. turismo_murcia        → 1 evento    → https://www.turismoregiondemurcia.es/es/agenda/
+
+❌ NO FUNCIONAN:
+9.  turismo_santander    → 0 válidos   → https://turismo.santander.es/actualidad/proximos-eventos
+10. riojaforum           → 0 eventos   → https://riojaforum.com/en/agenda
+11. melilla_cultura      → DESACTIVADA → (carga por AJAX, no scrapeable con HTTP directo)
